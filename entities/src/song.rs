@@ -5,13 +5,16 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
 #[sea_orm(table_name = "song")]
 pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
     pub title: String,
     pub path: String,
+    pub genre: String,
+    pub suffix: String,
+    pub content_type: String,
     pub track: i32,
     pub duration: i32,
-    pub album_id: i32,
+    pub album_id: Uuid,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -33,12 +36,3 @@ impl Related<super::album::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-
-#[derive(DeriveIntoActiveModel, PartialEq, Eq, Hash, Clone, Debug)]
-pub struct SongModel {
-    pub title: String,
-    pub duration: i32,
-    pub track: i32,
-    pub album_id: i32,
-    pub path: String
-}

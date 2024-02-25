@@ -1,5 +1,4 @@
 use sea_orm_migration::prelude::*;
-use sea_orm::{EnumIter, Iterable};
 
 pub struct Migration;
 
@@ -35,7 +34,10 @@ enum Song {
     Track,
     Duration,
     AlbumId,
-    Path
+    Path,
+    Genre,
+    Suffix,
+    ContentType
 }
 
 #[async_trait::async_trait]
@@ -50,9 +52,9 @@ impl MigrationTrait for Migration {
                     .table(Artist::Table)
                     .col(
                         ColumnDef::new(Artist::Id)
-                            .integer()
+                            .uuid()
                             .not_null()
-                            .auto_increment()
+                            .extra("DEFAULT gen_random_uuid()")
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Artist::Name).string().not_null())
@@ -61,16 +63,16 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Create table for Abums
+        // Create table for Albums
         manager.create_table(
             Table::create()
                 .table(Album::Table)
-                .col(ColumnDef::new(Album::Id).integer().not_null().auto_increment().primary_key())
+                .col(ColumnDef::new(Album::Id).uuid().not_null().extra("DEFAULT gen_random_uuid()").primary_key())
                 .col(ColumnDef::new(Album::Name).string().not_null())
                 .col(ColumnDef::new(Album::Year).integer().not_null())
                 .col(ColumnDef::new(Album::SongCount).integer().not_null())
                 // Can't have an Album without an Artist
-                .col(ColumnDef::new(Album::ArtistId).integer().not_null())
+                .col(ColumnDef::new(Album::ArtistId).uuid().not_null())
                 .foreign_key(ForeignKey::create().name("fk-album-artist_id").from(Album::Table, Album::ArtistId).to(Artist::Table, Artist::Id))
                 .to_owned()
         )
@@ -80,13 +82,16 @@ impl MigrationTrait for Migration {
         manager.create_table(
             Table::create()
                 .table(Song::Table)
-                .col(ColumnDef::new(Song::Id).integer().not_null().auto_increment().primary_key())
+                .col(ColumnDef::new(Song::Id).uuid().extra("DEFAULT gen_random_uuid()").not_null().primary_key())
                 .col(ColumnDef::new(Song::Title).string().not_null())
                 .col(ColumnDef::new(Song::Path).string().not_null())
+                .col(ColumnDef::new(Song::Genre).string().not_null())
+                .col(ColumnDef::new(Song::Suffix).string().not_null())
+                .col(ColumnDef::new(Song::ContentType).string().not_null())
                 .col(ColumnDef::new(Song::Track).integer().not_null())
                 .col(ColumnDef::new(Song::Duration).integer().not_null())
                 // Can't have a song without an Album
-                .col(ColumnDef::new(Song::AlbumId).integer().not_null())
+                .col(ColumnDef::new(Song::AlbumId).uuid().not_null())
                 .foreign_key(ForeignKey::create().name("fk-song-album_id").from(Song::Table, Song::AlbumId).to(Album::Table, Album::Id))
                 .to_owned()
         )
@@ -97,7 +102,7 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
-    // Define how to rollback this migration: Drop all three tables
+    // Define how to roll back this migration: Drop all three tables
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .drop_table(Table::drop().table(Song::Table).to_owned())

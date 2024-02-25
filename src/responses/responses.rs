@@ -1,98 +1,230 @@
+use chrono;
+use chrono::Utc;
+use sea_orm::prelude::Uuid;
 use serde::Serialize;
-use sqlx::types::chrono;
-use sqlx::types::chrono::{TimeZone, Utc};
+use uuid;
+
+use entities::{album, artist};
 
 #[derive(Serialize, Clone)]
-pub struct subsonic_response<T> {
+pub struct SubsonicResponse<T> {
     #[serde(rename = "subsonic-response")]
     pub(crate) subsonic_response: T,
 }
 
 #[derive(Serialize, Clone)]
-pub struct error_response {
+pub struct ErrorResponse {
     pub(crate) status: String,
     pub(crate) version: String,
     pub(crate) r#type: String,
-    pub(crate) serverVersion: String,
-    pub(crate) error: error_response_container,
+    #[serde(rename = "serverVersion")]
+    pub(crate) server_version: String,
+    pub(crate) error: ErrorResponseContainer,
 }
 
 #[derive(Serialize, Clone)]
-pub struct error_response_container {
+pub struct ErrorResponseContainer {
     pub(crate) code: i32,
     pub(crate) message: String,
 }
 
-impl error_response {
-    fn from_message(message: String) -> Self {
+impl SubsonicResponse<ErrorResponse> {
+    pub fn from_message(message: String) -> Self {
         Self {
-            status: "failed".to_string(),
-            version: "1.1.16".to_string(),
-            r#type: "soniccave".to_string(),
-            serverVersion: "0.0.1".to_string(),
-            error: error_response_container { code: 0, message },
+            subsonic_response: {
+                ErrorResponse {
+                    status: "failed".to_string(),
+                    version: "1.1.16".to_string(),
+                    r#type: "soniccave".to_string(),
+                    server_version: "0.0.1".to_string(),
+                    error: ErrorResponseContainer { code: 0, message },
+                }
+            }
+        }
+    }
+    pub fn from_error_code(code: i32, message: String) -> Self {
+        Self {
+            subsonic_response: {
+                ErrorResponse {
+                    status: "failed".to_string(),
+                    version: "1.1.16".to_string(),
+                    r#type: "soniccave".to_string(),
+                    server_version: "0.0.1".to_string(),
+                    error: ErrorResponseContainer { code, message },
+                }
+            }
         }
     }
 }
 
 #[derive(Serialize, Clone)]
-pub struct artists_endpoint_response {
+pub struct ArtistsEndpointResponse {
     pub(crate) status: String,
     pub(crate) version: String,
     pub(crate) r#type: String,
-    pub(crate) serverVersion: String,
-    pub(crate) artists: artists_endpoint_response_index,
+    #[serde(rename = "serverVersion")]
+    pub(crate) server_version: String,
+    pub(crate) artists: ArtistsEndpointResponseIndex,
 }
 
 #[derive(Serialize, Clone)]
-pub struct artists_endpoint_response_index {
-    pub(crate) index: Vec<artist_index>,
+pub struct ArtistsEndpointResponseIndex {
+    pub(crate) index: Vec<ArtistIndex>,
 }
 
 #[derive(Serialize, Clone)]
-pub struct artist_index {
+pub struct ArtistIndex {
     pub(crate) name: String,
-    pub(crate) artist: Vec<artist_response>,
+    pub(crate) artist: Vec<ArtistItem>,
 }
 
 #[derive(Serialize, Clone)]
-pub struct artist_response {
-    pub(crate) id: i32,
+pub struct ArtistItem {
+    pub(crate) id: Uuid,
     pub(crate) name: String,
-    pub(crate) albumCount: i32,
-    pub(crate) artistImageUrl: String,
+    #[serde(rename = "albumCount")]
+    pub(crate) album_count: i32,
+    #[serde(rename = "artistImageUrl")]
+    pub(crate) artist_image_url: String,
 }
 
 #[derive(Serialize, Clone)]
-pub struct album_list2_response {
+pub struct AlbumList2Response {
     pub(crate) status: String,
     pub(crate) version: String,
     pub(crate) r#type: String,
-    pub(crate) serverVersion: String,
-    pub(crate) albumList2: album_list_2,
+    #[serde(rename = "serverVersion")]
+    pub(crate) server_version: String,
+    #[serde(rename = "albumList2")]
+    pub(crate) album_list2: AlbumList2,
 }
 
 #[derive(Serialize, Clone)]
-pub struct album_list_2 {
-    pub(crate) album: Vec<album_list2_item>,
+pub struct AlbumList2 {
+    pub(crate) album: Vec<AlbumList2Item>,
 }
 
 #[derive(Serialize, Clone)]
-pub struct album_list2_item {
-    pub(crate) id: i32,
-    pub(crate) parent: i32,
-    pub(crate) isDir: bool,
+pub struct AlbumList2Item {
+    pub(crate) id: Uuid,
+    pub(crate) parent: Uuid,
+    #[serde(rename = "isDir")]
+    pub(crate) is_dir: bool,
     pub(crate) title: String,
     pub(crate) name: String,
     pub(crate) album: String,
     pub(crate) artist: String,
     pub(crate) year: i32,
     pub(crate) genre: String,
-    pub(crate) coverArt: String,
+    #[serde(rename = "coverArt")]
+    pub(crate) cover_art: Uuid,
     pub(crate) duration: i32,
-    pub(crate) playCount: i32,
+    #[serde(rename = "playCount")]
+    pub(crate) play_count: i32,
     pub(crate) created: chrono::DateTime<Utc>,
-    pub(crate) artistId: i32,
-    pub(crate) songCount: i32,
-    pub(crate) isVideo: bool,
+    #[serde(rename = "artistId")]
+    pub(crate) artist_id: Uuid,
+    #[serde(rename = "songCount")]
+    pub(crate) song_count: i32,
+    #[serde(rename = "isVideo")]
+    pub(crate) is_video: bool,
+}
+
+impl SubsonicResponse<AlbumList2Response> {
+    pub fn album_list2_from_album_list(list: Vec<album::Model>, artists_list: Vec<artist::Model>) -> Self {
+        let mut ret = Vec::new();
+        for item in list {
+            // I'm sure I have the artist
+            let artist = artists_list.iter().find(|i| i.id == item.artist_id).unwrap();
+            ret.push(
+                AlbumList2Item {
+                    id: item.id,
+                    parent: artist.id,
+                    is_dir: true,
+                    title: item.name.to_owned(),
+                    name: item.name.to_owned(),
+                    album: item.name.to_owned(),
+                    artist: artist.name.to_owned(),
+                    year: item.year,
+                    genre: "".to_string(),
+                    cover_art: Uuid::new_v4(),
+                    duration: 0,
+                    play_count: 0,
+                    created: Utc::now(),
+                    artist_id: artist.id,
+                    song_count: item.song_count,
+                    is_video: false,
+                }
+            )
+        }
+        Self {
+            subsonic_response: AlbumList2Response {
+                status: "ok".to_string(),
+                version: "1.1.16".to_string(),
+                r#type: "soniccave".to_string(),
+                server_version: "0.0.1".to_string(),
+                album_list2: AlbumList2 { album: ret },
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct ArtistResponse {
+    pub(crate) status: String,
+    pub(crate) version: String,
+    pub(crate) r#type: String,
+    #[serde(rename = "serverVersion")]
+    pub(crate) server_version: String,
+    pub(crate) artist: ArtistResponseItem,
+}
+#[derive(Serialize, Clone)]
+pub struct ArtistResponseItem {
+    id: Uuid,
+    name: String,
+    #[serde(rename = "albumCount")]
+    album_count: i32,
+    #[serde(rename = "artistImageUrl")]
+    artist_image_url: String,
+    album: Vec<AlbumList2Item>,
+}
+
+impl SubsonicResponse<ArtistResponse> {
+    pub fn artist_from_album_list(list: Vec<album::Model>, artist: artist::Model) -> Self {
+        let mut ret: Vec<AlbumList2Item> = list.iter().map(|item| {
+            AlbumList2Item {
+                id: item.id,
+                parent: artist.id,
+                is_dir: true,
+                title: item.name.to_owned(),
+                name: item.name.to_owned(),
+                album: item.name.to_owned(),
+                artist: artist.name.to_owned(),
+                year: item.year,
+                genre: "".to_string(),
+                cover_art: Uuid::new_v4(),
+                duration: 0,
+                play_count: 0,
+                created: Utc::now(),
+                artist_id: artist.id,
+                song_count: item.song_count,
+                is_video: false,
+            }
+        }).collect();
+        Self {
+            subsonic_response: ArtistResponse {
+                status: "ok".to_string(),
+                version: "1.1.16".to_string(),
+                r#type: "soniccave".to_string(),
+                server_version: "0.0.1".to_string(),
+                artist: ArtistResponseItem {
+                    id: artist.id,
+                    name: artist.name,
+                    album_count: list.capacity() as i32,
+                    artist_image_url: "".to_string(),
+                    album: ret,
+                },
+            },
+        }
+    }
 }

@@ -4,4 +4,3 @@ pub use super::album::Entity as Album;
 pub use super::artist::Entity as Artist;
 pub use super::song::Entity as Song;
 pub use super::user::Entity as User;
-

@@ -1,4 +1,5 @@
 use sea_orm_migration::prelude::*;
+use uuid::Uuid;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -21,9 +22,9 @@ impl MigrationTrait for Migration {
                     .table(User::Table)
                     .col(
                         ColumnDef::new(User::Id)
-                            .integer()
+                            .uuid()
                             .not_null()
-                            .auto_increment()
+                            .extra("DEFAULT gen_random_uuid()")
                             .primary_key(),
                     )
                     .col(ColumnDef::new(User::Username).string().not_null())

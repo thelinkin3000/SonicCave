@@ -3,11 +3,13 @@ use std::time::SystemTime;
 
 use sea_orm::{ActiveValue, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel, ModelTrait, PaginatorTrait, QueryFilter, QueryOrder};
 use sea_orm::ColumnTrait;
+use sea_orm::prelude::Uuid;
 
 use entities::{album, artist, song};
-use entities::album::AlbumModel;
-use entities::artist::ArtistModel;
-use entities::song::SongModel;
+use entities::album_local_model::AlbumModel;
+use entities::artist_local_model::ArtistModel;
+use entities::song_local_model::SongModel;
+
 
 pub async fn sync_database(mut hashmap: HashMap<ArtistModel, HashMap<AlbumModel, Vec<SongModel>>>, conn: &DatabaseConnection) -> Result<(), DbErr> {
     let connection = conn.to_owned();
@@ -19,8 +21,7 @@ pub async fn sync_database(mut hashmap: HashMap<ArtistModel, HashMap<AlbumModel,
         .paginate(&connection, 50);
 
     let mut artist_models: Vec<&ArtistModel> = hashmap.keys().to_owned().into_iter().collect();
-
-
+    let mut artists_count = 0;
     while let Ok(Some(database_artists)) = artist_pages.fetch_and_next().await {
         for mut database_artist in database_artists {
             if let Some(artist_model) = artist_models.to_owned().into_iter().find(|artist_model| artist_model.name.eq(&database_artist.name)) {
@@ -42,7 +43,7 @@ pub async fn sync_database(mut hashmap: HashMap<ArtistModel, HashMap<AlbumModel,
                                 delete_song(database_song.id, &connection).await?;
                             }
                         }
-                        if (song_models.len() > 0) {
+                        if song_models.len() > 0 {
                             // Let's add the songs!
                             add_song(song_models, database_album.id, &connection).await?;
                         }
@@ -63,27 +64,29 @@ pub async fn sync_database(mut hashmap: HashMap<ArtistModel, HashMap<AlbumModel,
                 // Should delete it. It exists in database but not in filesystem.
                 _ = delete_artist(database_artist.id, &connection.to_owned()).await;
             }
+            println!("Handled {} artists", artists_count);
+            artists_count += 1;
         }
     }
 
     for artist in artist_models {
         add_artist(&artist, hashmap.get(&artist).unwrap(), &connection).await?;
+        println!("Handled {} artists", artists_count);
+        artists_count += 1;
     }
-
     let end = SystemTime::now();
     let duration = end.duration_since(start).unwrap().as_millis();
     println!("Duration: {}ms", duration);
     return Ok(());
 }
 
-async fn delete_song(song_id: i32, connection: &DatabaseConnection) -> Result<(), DbErr> {
+async fn delete_song(song_id: Uuid, connection: &DatabaseConnection) -> Result<(), DbErr> {
     let song_model = song::Entity::find_by_id(song_id).one(*(&connection)).await?.unwrap();
     song_model.delete(*(&connection)).await?;
     return Ok(());
 }
 
-async fn delete_album(album_id: i32, connection: &DatabaseConnection) -> Result<(), DbErr> {
-    println!("Deleteing album!");
+async fn delete_album(album_id: Uuid, connection: &DatabaseConnection) -> Result<(), DbErr> {
     let album = album::Entity::find_by_id(album_id).one(*(&connection)).await?.unwrap();
     let songs = album.find_related(song::Entity).all(*(&connection)).await?;
     for song in songs {
@@ -93,7 +96,7 @@ async fn delete_album(album_id: i32, connection: &DatabaseConnection) -> Result<
     return Ok(());
 }
 
-async fn delete_artist(artist_id: i32, connection: &DatabaseConnection) -> Result<(), DbErr> {
+async fn delete_artist(artist_id: Uuid, connection: &DatabaseConnection) -> Result<(), DbErr> {
     let artist = artist::Entity::find_by_id(artist_id).one(*(&connection)).await?.unwrap();
     let albums = album::Entity::find().filter(album::Column::ArtistId.eq(artist.id)).all(*(&connection)).await?;
     for album in albums.to_owned() {
@@ -103,14 +106,14 @@ async fn delete_artist(artist_id: i32, connection: &DatabaseConnection) -> Resul
     return Ok(());
 }
 
-async fn add_album(artist_id: i32, album_model: &AlbumModel, songs: &Vec<SongModel>, connection: &DatabaseConnection) -> Result<(), DbErr> {
-    let mut album_active_model = (album_model).to_owned().into_active_model();
+async fn add_album(artist_id: Uuid, album_model: &AlbumModel, songs: &Vec<SongModel>, connection: &DatabaseConnection) -> Result<(), DbErr> {
+    let mut album_active_model = album_model.to_owned().into_active_model();
     album_active_model.artist_id = ActiveValue::Set(artist_id);
     let album_id = album::Entity::insert(album_active_model).exec(*(&connection)).await?.last_insert_id;
     add_song(songs, album_id, &connection).await
 }
 
-async fn add_song(song_models: &Vec<SongModel>, album_id: i32, connection: &DatabaseConnection) -> Result<(), DbErr> {
+async fn add_song(song_models: &Vec<SongModel>, album_id: Uuid, connection: &DatabaseConnection) -> Result<(), DbErr> {
     let mut song_vec: Vec<song::ActiveModel> = Vec::new().to_owned();
     song_models.iter().for_each(|song_model| {
         let mut song = song_model.to_owned().into_active_model();
@@ -118,6 +121,7 @@ async fn add_song(song_models: &Vec<SongModel>, album_id: i32, connection: &Data
         song_vec.push(song);
     });
     song::Entity::insert_many(song_vec.to_owned()).exec(*(&connection)).await?;
+
     Ok(())
 }
 

@@ -6,3 +6,7 @@ pub mod album;
 pub mod artist;
 pub mod song;
 pub mod user;
+pub mod user_local_model;
+pub mod album_local_model;
+pub mod artist_local_model;
+pub mod song_local_model;

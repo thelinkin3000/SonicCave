@@ -1,25 +1,303 @@
-use axum::extract::State;
-use axum::response::IntoResponse;
-use sea_orm::{ColIdx, EntityTrait};
-use axum::extract::Query;
-use entities::prelude::Artist;
-use crate::DatabaseState;
 use std::collections::HashMap;
+
+use axum::extract::Query;
+use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
-use crate::responses::responses::{artist_index, artist_response, artists_endpoint_response, artists_endpoint_response_index, subsonic_response};
+use log::error;
+use log::info;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+use sea_orm::prelude::Uuid;
+use sea_orm::QueryFilter;
+use sea_orm::{
+    ColIdx, ColumnTrait, DbBackend, EntityTrait, FromQueryResult, Order, QueryOrder, QuerySelect,
+    Statement,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{Execute, FromRow, Postgres, query_as, QueryBuilder, Row};
 
+use crate::responses::album_response::AlbumResponse;
+use crate::responses::responses::{
+    ArtistIndex, ArtistItem, ArtistResponse, ArtistsEndpointResponse, ArtistsEndpointResponseIndex,
+    ErrorResponse, SubsonicResponse,
+};
+use crate::DatabaseState;
+use entities::album::Column;
+use entities::prelude::{Album, Artist};
+use entities::{album, artist, song};
 
-struct GetAlbumQuery {
-
-
+#[derive(Deserialize)]
+pub struct GetAlbumsQuery {
+    r#type: String,
+    #[serde(default)]
+    size: Option<i32>,
+    #[serde(default)]
+    offset: Option<i32>,
 }
 
-pub async fn get_albums(State(state): State<DatabaseState>, query: Option<Query<GetAlbumQuery>>) -> impl IntoResponse {
-    if let None = query {
+#[derive(Deserialize)]
+pub struct IdQuery {
+    id: Uuid,
+}
 
+#[derive(Debug, FromQueryResult)]
+struct IdOnly {
+    id: Uuid,
+}
+
+
+#[derive(Deserialize, Clone)]
+pub struct SearchQuery {
+    query: String,
+    artistCount: Option<i32>,
+    artistOffset: Option<i32>,
+    albumCount: Option<i32>,
+    albumOffset: Option<i32>,
+    songCount: Option<i32>,
+    songOffset: Option<i32>,
+}
+
+#[derive(FromRow, Serialize)]
+struct IdName{
+    id: Uuid,
+    name: String
+}
+pub async fn search(
+    State(state): State<DatabaseState>,
+    query_option: Option<Query<SearchQuery>>,
+) -> impl IntoResponse {
+    if let None = query_option {
+        let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
+            10,
+            r#"required parameter "query" is missing"#.to_string(),
+        );
+        return Json(ret).into_response();
     }
-    let artists_result = Artist::find();
+    let query = query_option.unwrap().clone();
+    info!("Query: {}", query.query);
+    let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        // Note the trailing space; most calls to `QueryBuilder` don't automatically insert
+        // spaces as that might interfere with identifiers or quoted strings where exact
+        // values may matter.
+        "select \"id\", \"name\" from \"artist\" where \"name\" ilike "
+    );
+
+    // Note that `.into_iter()` wasn't needed here since `users` is already an iterator.
+    query_builder.push_bind(format!("%{}%", &query.query));
+    let sql = query_builder.build_query_as::<IdName>()
+        .bind(&query.query).sql();
+    info!("{}", sql);
+    let rows = query_builder.build_query_as::<IdName>()
+        .bind(&query.query)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap();
+    info!("{}",serde_json::to_string(&rows).unwrap());
+    return Json(rows).into_response();
+}
+
+
+pub async fn get_album(
+    State(state): State<DatabaseState>,
+    query_option: Option<Query<IdQuery>>,
+) -> impl IntoResponse {
+    if let None = query_option {
+        let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
+            10,
+            r#"required parameter "id" is missing"#.to_string(),
+        );
+        return Json(ret).into_response();
+    }
+
+    let album_query = album::Entity::find()
+        .filter(album::Column::Id.eq(query_option.unwrap().id))
+        .one(&state.connection)
+        .await;
+
+    if let Err(err) = album_query {
+        error!("Error fetching album: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let album_option = album_query.unwrap();
+
+    if let None = album_option {
+        let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
+            10,
+            r#"resource with provided id does not exist"#.to_string(),
+        );
+        return Json(ret).into_response();
+    }
+    let album = album_option.unwrap();
+
+    // Let's trust the referential integrity
+    let artist = artist::Entity::find_by_id(album.artist_id)
+        .one(&state.connection)
+        .await
+        .unwrap()
+        .unwrap();
+    let songs = song::Entity::find()
+        .filter(song::Column::AlbumId.eq(album.id))
+        .all(&state.connection)
+        .await
+        .unwrap();
+    let ret = SubsonicResponse {
+        subsonic_response: AlbumResponse::from_album(artist, album, songs),
+    };
+    Json(ret).into_response()
+}
+
+pub async fn get_albums(
+    State(state): State<DatabaseState>,
+    query_option: Option<Query<GetAlbumsQuery>>,
+) -> impl IntoResponse {
+    if let None = query_option {
+        let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
+            10,
+            r#"required parameter "type" is missing"#.to_string(),
+        );
+        return Json(ret).into_response();
+    }
+    let mut query = query_option.unwrap();
+    if query.offset == None {
+        query.offset = Some(0);
+    }
+    if query.size == None {
+        query.size = Some(10)
+    }
+    let supported = vec![
+        "frequent".to_string(),
+        "newest".to_string(),
+        "recent".to_string(),
+        "random".to_string(),
+        "alphabeticalByName".to_string(),
+    ];
+    if !supported.contains(&query.r#type) {
+        let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
+            10,
+            r#"required parameter "type" is missing"#.to_string(),
+        );
+        return Json(ret).into_response();
+    }
+    match query.r#type.as_str() {
+        "random" => {
+            let all_album_ids = IdOnly::find_by_statement(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"SELECT "album"."id" FROM "album""#,
+                vec![],
+            ))
+            .all(&state.connection)
+            .await;
+            if let Err(err) = all_album_ids {
+                println!("52 {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            let mut album_ids: Vec<Uuid> =
+                all_album_ids.unwrap().into_iter().map(|i| i.id).collect();
+            album_ids.shuffle(&mut thread_rng());
+            if query.size.unwrap() < album_ids.len() as i32 {
+                album_ids = album_ids[0..query.size.unwrap() as usize].to_vec();
+            }
+            let albums_query = album::Entity::find()
+                .filter(album::Column::Id.is_in(album_ids))
+                .all(&state.connection)
+                .await;
+            if let Err(err) = albums_query {
+                println!("62 {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            let albums: Vec<album::Model> = albums_query.unwrap();
+            let artist_ids = albums
+                .clone()
+                .into_iter()
+                .map(|i| i.artist_id)
+                .collect::<Vec<Uuid>>();
+            let artists_query = artist::Entity::find()
+                .filter(artist::Column::Id.is_in(artist_ids))
+                .all(&state.connection)
+                .await;
+            if let Err(err) = artists_query {
+                println!("69 {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            let artists = artists_query.unwrap();
+            let ret =
+                SubsonicResponse::album_list2_from_album_list(albums.clone(), artists.clone());
+            return Json(ret).into_response();
+        }
+        "frequent" | "newest" | "recent" | "alphabeticalByName" => {
+            let albums_query = album::Entity::find()
+                .order_by(album::Column::Name, Order::Asc)
+                .offset(Some(query.offset.unwrap() as u64))
+                .limit(Some(query.size.unwrap() as u64))
+                .all(&state.connection)
+                .await;
+            if let Err(err) = albums_query {
+                println!("62 {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            let albums: Vec<album::Model> = albums_query.unwrap();
+            let artist_ids = albums
+                .clone()
+                .into_iter()
+                .map(|i| i.artist_id)
+                .collect::<Vec<Uuid>>();
+            let artists_query = artist::Entity::find()
+                .filter(artist::Column::Id.is_in(artist_ids))
+                .all(&state.connection)
+                .await;
+            if let Err(err) = artists_query {
+                println!("69 {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            let artists = artists_query.unwrap();
+            let ret =
+                SubsonicResponse::album_list2_from_album_list(albums.clone(), artists.clone());
+            return Json(ret).into_response();
+        }
+        _ => {}
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+pub async fn get_artist(
+    State(state): State<DatabaseState>,
+    query_option: Option<Query<IdQuery>>,
+) -> impl IntoResponse {
+    if let None = query_option {
+        let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
+            10,
+            r#"required parameter "id" is missing"#.to_string(),
+        );
+        return Json(ret).into_response();
+    }
+    let query = query_option.unwrap();
+    let artist_result = Artist::find()
+        .filter(artist::Column::Id.eq(query.id))
+        .one(&state.connection)
+        .await;
+    if let Err(err) = artist_result {
+        error!("Error retrieving data from db: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let artist = artist_result.unwrap();
+    if let None = artist {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let artist = artist.unwrap();
+    let albums_result = Album::find()
+        .filter(album::Column::ArtistId.eq(artist.id))
+        .all(&state.connection)
+        .await;
+    if let Err(err) = albums_result {
+        error!("Error retrieving data from db: {}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let albums = albums_result.unwrap();
+    let ret = SubsonicResponse::artist_from_album_list(albums, artist);
+    return Json(ret).into_response();
 }
 
 pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoResponse {
@@ -28,9 +306,10 @@ pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoRespons
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let artists = artists_result.unwrap();
-    let mut artists_hashmap: HashMap<String, Vec<artist_response>> = HashMap::new();
+    let mut artists_hashmap: HashMap<String, Vec<ArtistItem>> = HashMap::new();
     for artist in artists {
-        let name = artist.name
+        let name = artist
+            .name
             .trim_start_matches("A ")
             .trim_start_matches("O ")
             .trim_start_matches("As ")
@@ -44,54 +323,52 @@ pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoRespons
             .trim_start_matches("The ");
 
         let first_letter;
-        if (name.len() > 0) {
+        if name.len() > 0 {
             let char_index = name.char_indices().nth(1).unwrap_or((1, ' ')).0;
             first_letter = name[0..char_index].to_uppercase().clone();
         } else {
             first_letter = "".to_string();
         }
 
-        if (!artists_hashmap.contains_key(&first_letter)) {
-            artists_hashmap.insert(first_letter, vec![artist_response {
-                id: artist.id,
-                name: artist.name,
-                albumCount: 0,
-                artistImageUrl: "".to_string(),
-            }]);
-        } else {
-            let mut vec: &mut Vec<artist_response> = artists_hashmap.get_mut(&first_letter).unwrap();
-            vec.push(
-                artist_response {
+        if !artists_hashmap.contains_key(&first_letter) {
+            artists_hashmap.insert(
+                first_letter,
+                vec![ArtistItem {
                     id: artist.id,
                     name: artist.name,
-                    albumCount: 0,
-                    artistImageUrl: "".to_string(),
-                });
+                    album_count: 0,
+                    artist_image_url: "".to_string(),
+                }],
+            );
+        } else {
+            let mut vec: &mut Vec<ArtistItem> = artists_hashmap.get_mut(&first_letter).unwrap();
+            vec.push(ArtistItem {
+                id: artist.id,
+                name: artist.name,
+                album_count: 0,
+                artist_image_url: "".to_string(),
+            });
         }
     }
-    let mut artists_endpoint_response: artists_endpoint_response = artists_endpoint_response {
+    let mut artists_endpoint_response: ArtistsEndpointResponse = ArtistsEndpointResponse {
         status: "ok".to_string(),
         version: "1.1.16".to_string(),
         r#type: "SonicCave".to_string(),
-        serverVersion: "0.0.1".to_string(),
-        artists: artists_endpoint_response_index {
-            index: vec![],
-        },
+        server_version: "0.0.1".to_string(),
+        artists: ArtistsEndpointResponseIndex { index: vec![] },
     };
     let mut keys: Vec<&String> = artists_hashmap.keys().into_iter().collect::<Vec<&String>>();
     keys.sort();
     for artist_key in keys {
         let mut artists_vec = artists_hashmap.get(artist_key).unwrap().to_vec();
-        artists_vec.sort_by(|a, b| {
-            a.name.to_uppercase().cmp(&b.name.to_uppercase())
-        });
-        let index = artist_index {
+        artists_vec.sort_by(|a, b| a.name.to_uppercase().cmp(&b.name.to_uppercase()));
+        let index = ArtistIndex {
             name: artist_key.to_string(),
             artist: artists_vec,
         };
         artists_endpoint_response.artists.index.push(index);
     }
-    let ret = subsonic_response {
+    let ret = SubsonicResponse {
         subsonic_response: artists_endpoint_response,
     };
     return Json(ret).into_response();

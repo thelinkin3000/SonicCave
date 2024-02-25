@@ -2,6 +2,7 @@ use axum::extract::{Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use log::{error, warn};
 use md5::{Digest, Md5};
 use sea_orm::EntityTrait;
 use sea_orm::QueryFilter;
@@ -43,19 +44,19 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     // do something with `request`...
-    println!("hey im here");
     let owned_auth = auth.unwrap_or_default().to_owned();
     let user_result = User::find().filter(user::Column::Username.eq(&owned_auth.u)).one(&state.connection).await;
-    if let Err(_) = user_result {
+    if let Err(err) = user_result {
+        error!("Error in database connection: {}", err);
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let user_option = user_result.unwrap();
     if let None = user_option {
+        warn!("User doesn't exist: {}", &owned_auth.u);
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let user = user_option.unwrap();
 
-    println!("user exists!");
     // create a Md5 hasher instance
     let mut hasher = Md5::new();
 
@@ -66,6 +67,7 @@ pub async fn auth_middleware(
     // which in this case is equivalent to [u8; 16]
     let result = hasher.finalize();
     if !owned_auth.t.eq(&format!("{:x}", result)) {
+        warn!("Wrong password for user {}", &owned_auth.u);
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
