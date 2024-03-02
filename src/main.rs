@@ -17,7 +17,9 @@ use sea_orm::{
     ColumnTrait, ConnectOptions, Database, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
+use stopwatch::Stopwatch;
 use tokio::main;
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
@@ -25,7 +27,6 @@ use tower_http::cors::{Any, CorsLayer};
 use entities::prelude::Song;
 use entities::song;
 use migration::{Migrator, MigratorTrait};
-use sqlx::postgres::PgPoolOptions;
 
 use crate::auth_middleware::auth_middleware;
 use crate::endpoint_handlers::{get_album, get_albums, get_artist, get_artists, search};
@@ -112,23 +113,39 @@ async fn main() -> Result<(), DbErr> {
         .max_connections(5)
         .connect(config.postgres.to_owned().as_str())
         .await;
-    if let Err(err) = pool_result{
+    if let Err(err) = pool_result {
         error!("Error connecting to database: {}", err);
         return Ok(());
     }
     let pool = pool_result.unwrap();
     let state = DatabaseState {
         connection: db.to_owned(),
-        pool: pool.to_owned()
+        pool: pool.to_owned(),
     };
     Migrator::up(&db, None).await?;
     // build our application with a single route
-    let app = Router::new()
+
+    let authenticated: Router = Router::new()
         // Root
         .route("/", get(|| async { "Hello, World!" }))
+        // Stream
+        .route("/stream", get(get_stream))
+        .route("/getArtists", get(get_artists))
+        .route("/getArtist", get(get_artist))
+        .route("/search3", get(search))
+        .route("/getAlbumList2", get(get_albums))
+        .route("/getAlbum", get(get_album))
+        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn_with_state(
+            state.to_owned(),
+            auth_middleware,
+        ))
+        .with_state(state.to_owned());
+    let app: Router = Router::new()
+        .route("/search", get(search))
         // StartScan
         .route(
-            "/rest/startScan",
+            "/startScan",
             get(|| async {
                 tokio::spawn(async move {
                     // `move` makes the closure take ownership of `slf`
@@ -137,52 +154,8 @@ async fn main() -> Result<(), DbErr> {
                 "Syncing. Check console output!"
             }),
         )
-        // Stream
-        .route("/rest/stream", get(get_stream))
-        .layer(CorsLayer::permissive())
-        .layer(middleware::from_fn_with_state(
-            state.to_owned(),
-            auth_middleware,
-        ))
         .with_state(state.to_owned())
-        // Get Artists
-        .route("/rest/getArtists", get(get_artists))
-        .layer(CorsLayer::permissive())
-        .layer(middleware::from_fn_with_state(
-            state.to_owned(),
-            auth_middleware,
-        ))
-        // Get Artists
-        .route("/rest/getArtist", get(get_artist))
-        .layer(CorsLayer::permissive())
-        .layer(middleware::from_fn_with_state(
-            state.to_owned(),
-            auth_middleware,
-        ))
-        // Get Search
-        .route("/rest/search3", get(search))
-        .layer(CorsLayer::permissive())
-        .with_state(state.to_owned())
-        // .layer(middleware::from_fn_with_state(
-        //     state.to_owned(),
-        //     auth_middleware,
-        // ))
-        // Get Album list
-        .route("/rest/getAlbumList2", get(get_albums))
-        .layer(CorsLayer::permissive())
-        .layer(middleware::from_fn_with_state(
-            state.to_owned(),
-            auth_middleware,
-        ))
-        .with_state(state.to_owned())
-        // Get Album
-        .route("/rest/getAlbum", get(get_album))
-        .layer(CorsLayer::permissive())
-        .layer(middleware::from_fn_with_state(
-            state.to_owned(),
-            auth_middleware,
-        ))
-        .with_state(state.to_owned());
+        .nest("/rest", authenticated);
 
     // Welcome messages
     info!(
@@ -237,10 +210,12 @@ async fn get_stream(
         ));
     }
     let id = query.unwrap().id;
+
     let song_result = Song::find()
         .filter(song::Column::Id.eq(id))
         .one(&state.connection)
         .await;
+
     if let Err(_) = song_result {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -255,7 +230,6 @@ async fn get_stream(
         ));
     }
     let song = song_option.unwrap();
-
     info!("Streaming song {} with id {}", song.title, song.id);
 
     // `File` implements `AsyncRead`

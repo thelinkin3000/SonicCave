@@ -29,6 +29,7 @@ struct SongTags {
     genre: String,
     suffix: String,
     content_type: String,
+    disc_number: i32
 }
 
 
@@ -62,7 +63,6 @@ pub fn parse(paths: Vec<String>) -> HashMap<ArtistModel, HashMap<AlbumModel, Vec
                 if !artists_albums_map.get(&artist_model).unwrap().contains_key(&album_model) {
                     artists_albums_map.get_mut(&artist_model).unwrap().insert(album_model.to_owned(), Vec::new());
                 }
-
                 let song_model: SongModel = SongModel {
                     title: song_tags.title.to_owned(),
                     duration: song_tags.duration.to_owned(),
@@ -72,6 +72,7 @@ pub fn parse(paths: Vec<String>) -> HashMap<ArtistModel, HashMap<AlbumModel, Vec
                     genre: song_tags.genre,
                     suffix: song_tags.suffix,
                     content_type: song_tags.content_type,
+                    disc_number: song_tags.disc_number,
                 };
 
                 artists_albums_map.get_mut(&artist_model).unwrap().get_mut(&album_model.to_owned()).unwrap().push(song_model);
@@ -114,6 +115,7 @@ fn tag(path: &str) -> Option<SongTags> {
             genre: str::replace(genre, char::from(0), "?"),
             suffix: suffix.to_string(),
             content_type: format!("audio/{}",metadata.1.to_string()),
+            disc_number: tag.disc().unwrap_or(1) as i32,
         };
         return Some(song);
     }

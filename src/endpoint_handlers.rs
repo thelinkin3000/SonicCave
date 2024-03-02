@@ -5,6 +5,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use entities::album_local_model::AlbumSqlxModel;
+use entities::artist_local_model::ArtistSqlxModel;
+use entities::song_local_model::SongSqlxModel;
 use log::error;
 use log::info;
 use rand::seq::SliceRandom;
@@ -16,17 +19,20 @@ use sea_orm::{
     Statement,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{Execute, FromRow, Postgres, query_as, QueryBuilder, Row};
+use sqlx::{query_as, Execute, FromRow, Postgres, QueryBuilder, Row};
+
+use entities::album::Column;
+use entities::prelude::{Album, Artist};
+use entities::{album, artist, song};
 
 use crate::responses::album_response::AlbumResponse;
+use crate::responses::responses::SearchResponse;
+use crate::responses::responses::SearchResult;
 use crate::responses::responses::{
     ArtistIndex, ArtistItem, ArtistResponse, ArtistsEndpointResponse, ArtistsEndpointResponseIndex,
     ErrorResponse, SubsonicResponse,
 };
 use crate::DatabaseState;
-use entities::album::Column;
-use entities::prelude::{Album, Artist};
-use entities::{album, artist, song};
 
 #[derive(Deserialize)]
 pub struct GetAlbumsQuery {
@@ -47,7 +53,6 @@ struct IdOnly {
     id: Uuid,
 }
 
-
 #[derive(Deserialize, Clone)]
 pub struct SearchQuery {
     query: String,
@@ -60,10 +65,11 @@ pub struct SearchQuery {
 }
 
 #[derive(FromRow, Serialize)]
-struct IdName{
+struct IdName {
     id: Uuid,
-    name: String
+    name: String,
 }
+
 pub async fn search(
     State(state): State<DatabaseState>,
     query_option: Option<Query<SearchQuery>>,
@@ -76,28 +82,52 @@ pub async fn search(
         return Json(ret).into_response();
     }
     let query = query_option.unwrap().clone();
-    info!("Query: {}", query.query);
-    let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        // Note the trailing space; most calls to `QueryBuilder` don't automatically insert
-        // spaces as that might interfere with identifiers or quoted strings where exact
-        // values may matter.
-        "select \"id\", \"name\" from \"artist\" where \"name\" ilike "
-    );
 
-    // Note that `.into_iter()` wasn't needed here since `users` is already an iterator.
-    query_builder.push_bind(format!("%{}%", &query.query));
-    let sql = query_builder.build_query_as::<IdName>()
-        .bind(&query.query).sql();
-    info!("{}", sql);
-    let rows = query_builder.build_query_as::<IdName>()
-        .bind(&query.query)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap();
-    info!("{}",serde_json::to_string(&rows).unwrap());
-    return Json(rows).into_response();
+    let artist_rows = sqlx::query_as!(
+        ArtistSqlxModel,
+        r#"SELECT
+	*
+FROM "artist"
+WHERE SIMILARITY(name,$1) > 0.4 or name ilike '%' || $1 || '%'
+order by SIMILARITY(name,$1) desc
+        LIMIT 10;"#,
+        query.query
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap();
+    let album_rows = sqlx::query_as!(
+        AlbumSqlxModel,
+        r#"select album.*, artist.name as artist_name
+from album inner join artist on album.artist_id = artist.id
+where SIMILARITY(album.name,$1) > 0.4 or album.name ilike '%' || $1 || '%'
+or SIMILARITY(artist.name,$1) > 0.4 or artist.name ilike '%' || $1 || '%'
+order by SIMILARITY(album.name,$1) + SIMILARITY(artist.name,$1) * 0.3 desc
+        LIMIT 10;"#,
+        query.query
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap();
+    let song_rows = sqlx::query_as!(
+        SongSqlxModel,
+        r#"select song.*, album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
+        from song inner join album on song.album_id = album.id
+                  inner join artist on album.artist_id = artist.id
+        where SIMILARITY(song.title,$1) > 0.4 or song.title ilike '%' || $1 || '%'
+            or SIMILARITY(album.name,$1) > 0.4 or album.name ilike '%' || $1 || '%'
+        or SIMILARITY(artist.name,$1) > 0.4 or artist.name ilike '%' || $1 || '%'
+        order by SIMILARITY(song.title,$1) + SIMILARITY(album.name,$1) * 0.3 + SIMILARITY(artist.name,$1) * 0.15 desc
+        LIMIT 10;"#,
+        query.query
+    )
+    .fetch_all(&state.pool)
+    .await
+    .unwrap();
+    let ret =
+        SubsonicResponse::<SearchResponse>::from_search_result(artist_rows, album_rows, song_rows);
+    return Json(ret).into_response();
 }
-
 
 pub async fn get_album(
     State(state): State<DatabaseState>,
@@ -140,6 +170,8 @@ pub async fn get_album(
         .unwrap();
     let songs = song::Entity::find()
         .filter(song::Column::AlbumId.eq(album.id))
+        .order_by(song::Column::DiscNumber, Order::Asc)
+        .order_by(song::Column::Track, Order::Asc)
         .all(&state.connection)
         .await
         .unwrap();
