@@ -1,6 +1,7 @@
-use chrono;
 use chrono::Utc;
-use sea_orm::prelude::{DateTimeLocal, Uuid};
+use chrono::{self, DateTime, Local};
+use entities::playlist::Playlist;
+use sea_orm::prelude::Uuid;
 use serde::Serialize;
 
 use entities::{
@@ -9,6 +10,22 @@ use entities::{
 };
 
 use super::album_response::SongResponseData;
+
+fn get_status_ok() -> String {
+    "ok".to_string()
+}
+
+fn get_version() -> String {
+    "1.16.1".to_string()
+}
+
+fn get_type() -> String {
+    "soniccave".to_string()
+}
+
+fn get_server_version() -> String {
+    "0.0.1".to_string()
+}
 
 #[derive(Serialize, Clone)]
 pub struct SubsonicResponse<T> {
@@ -38,9 +55,9 @@ impl SubsonicResponse<ErrorResponse> {
             subsonic_response: {
                 ErrorResponse {
                     status: "failed".to_string(),
-                    version: "1.1.16".to_string(),
-                    r#type: "soniccave".to_string(),
-                    server_version: "0.0.1".to_string(),
+                    version: get_version(),
+                    r#type: get_type(),
+                    server_version: get_server_version(),
                     error: ErrorResponseContainer { code: 0, message },
                 }
             },
@@ -167,10 +184,10 @@ impl SubsonicResponse<AlbumList2Response> {
         }
         Self {
             subsonic_response: AlbumList2Response {
-                status: "ok".to_string(),
-                version: "1.1.16".to_string(),
-                r#type: "soniccave".to_string(),
-                server_version: "0.0.1".to_string(),
+                status: get_status_ok(),
+                version: get_version(),
+                r#type: get_type(),
+                server_version: get_server_version(),
                 album_list2: AlbumList2 { album: ret },
             },
         }
@@ -199,7 +216,7 @@ pub struct ArtistResponseItem {
 
 impl SubsonicResponse<ArtistResponse> {
     pub fn artist_from_album_list(list: Vec<album::Model>, artist: artist::Model) -> Self {
-        let mut ret: Vec<AlbumList2Item> = list
+        let ret: Vec<AlbumList2Item> = list
             .iter()
             .map(|item| AlbumList2Item {
                 id: item.id,
@@ -222,10 +239,10 @@ impl SubsonicResponse<ArtistResponse> {
             .collect();
         Self {
             subsonic_response: ArtistResponse {
-                status: "ok".to_string(),
-                version: "1.1.16".to_string(),
-                r#type: "soniccave".to_string(),
-                server_version: "0.0.1".to_string(),
+                status: get_status_ok(),
+                version: get_version(),
+                r#type: get_type(),
+                server_version: get_server_version(),
                 artist: ArtistResponseItem {
                     id: artist.id,
                     name: artist.name,
@@ -323,14 +340,148 @@ impl SubsonicResponse<SearchResponse> {
             .collect();
         Self {
             subsonic_response: SearchResponse {
-                status: "ok".to_string(),
-                version: "1.1.16".to_string(),
-                r#type: "soniccave".to_string(),
-                server_version: "0.0.1".to_string(),
+                status: get_status_ok(),
+                version: get_version(),
+                r#type: get_type(),
+                server_version: get_server_version(),
                 search_result3: SearchResult {
                     artist: artists,
                     album: albums,
                     song: songs,
+                },
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct PlaylistsResponse {
+    pub(crate) status: String,
+    pub(crate) version: String,
+    pub(crate) r#type: String,
+    #[serde(rename = "serverVersion")]
+    pub(crate) server_version: String,
+    pub(crate) playlists: PlaylistsResult,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PlaylistsResult {
+    pub(crate) playlist: Vec<PlaylistResultItem>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PlaylistResultItem {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
+    #[serde(rename = "songCount")]
+    pub(crate) song_count: i32,
+    pub(crate) duration: i32,
+    pub(crate) public: bool,
+    pub(crate) owner: String,
+    pub(crate) created: DateTime<Local>,
+    pub(crate) changed: DateTime<Local>,
+}
+
+impl SubsonicResponse<PlaylistsResponse> {
+    pub fn from_playlist_list(playlist_list: Vec<Playlist>) -> Self {
+        let playlists: Vec<PlaylistResultItem> = playlist_list
+            .into_iter()
+            .map(|playlist| PlaylistResultItem {
+                id: playlist.id,
+                name: playlist.name,
+                song_count: 0,
+                duration: 0,
+                public: true,
+                owner: "admin".to_string(),
+                created: Local::now(),
+                changed: Local::now(),
+            })
+            .collect();
+
+        Self {
+            subsonic_response: PlaylistsResponse {
+                status: get_status_ok(),
+                version: get_version(),
+                r#type: get_type(),
+                server_version: get_server_version(),
+                playlists: PlaylistsResult {
+                    playlist: playlists,
+                },
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct PlaylistResponse {
+    pub(crate) status: String,
+    pub(crate) version: String,
+    pub(crate) r#type: String,
+    #[serde(rename = "serverVersion")]
+    pub(crate) server_version: String,
+    pub(crate) playlist: PlaylistResult,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PlaylistResult {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
+    #[serde(rename = "songCount")]
+    pub(crate) song_count: i32,
+    pub(crate) duration: i32,
+    pub(crate) public: bool,
+    pub(crate) owner: String,
+    pub(crate) created: DateTime<Local>,
+    pub(crate) changed: DateTime<Local>,
+    pub(crate) entry: Vec<SongResponseData>,
+}
+
+impl SubsonicResponse<PlaylistResponse> {
+    pub fn from_playlist(playlist: Playlist, songs: Vec<SongSqlxModel>) -> Self {
+        let entry: Vec<SongResponseData> = songs
+            .into_iter()
+            .map(|x: SongSqlxModel| SongResponseData {
+                id: x.id,
+                parent: x.album_id,
+                is_dir: false,
+                title: x.title,
+                album: x.album_name,
+                artist: x.artist_name,
+                track: x.track,
+                year: x.year,
+                genre: x.genre,
+                cover_art: "".to_owned(),
+                size: 0,
+                content_type: x.content_type,
+                suffix: x.suffix,
+                duration: x.duration,
+                bit_rate: 0,
+                path: x.path,
+                play_count: 0,
+                disc_number: x.disc_number,
+                created: Utc::now(),
+                album_id: x.album_id,
+                artist_id: x.artist_id,
+                r#type: "audio".to_owned(),
+                is_video: false,
+            })
+            .collect();
+        Self {
+            subsonic_response: PlaylistResponse {
+                status: get_status_ok(),
+                version: get_version(),
+                r#type: get_type(),
+                server_version: get_server_version(),
+                playlist: PlaylistResult {
+                    id: playlist.id,
+                    name: playlist.name.to_owned(),
+                    song_count: 0,
+                    duration: 0,
+                    public: true,
+                    owner: "admin".to_owned(),
+                    created: Local::now(),
+                    changed: Local::now(),
+                    entry,
                 },
             },
         }

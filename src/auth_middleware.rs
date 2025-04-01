@@ -4,9 +4,9 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use log::{error, warn};
 use md5::{Digest, Md5};
+use sea_orm::ColumnTrait;
 use sea_orm::EntityTrait;
 use sea_orm::QueryFilter;
-use sea_orm::ColumnTrait;
 use serde::Deserialize;
 
 use entities::prelude::User;
@@ -26,14 +26,14 @@ pub struct Auth {
 
 impl Default for Auth {
     fn default() -> Self {
-        return Auth {
+        Auth {
             u: "".to_string(),
             t: "".to_string(),
             s: "".to_string(),
             v: "".to_string(),
             c: "".to_string(),
             f: "".to_string(),
-        };
+        }
     }
 }
 
@@ -45,7 +45,10 @@ pub async fn auth_middleware(
 ) -> Response {
     // do something with `request`...
     let owned_auth = auth.unwrap_or_default().to_owned();
-    let user_result = User::find().filter(user::Column::Username.eq(&owned_auth.u)).one(&state.connection).await;
+    let user_result = User::find()
+        .filter(user::Column::Username.eq(&owned_auth.u))
+        .one(&state.connection)
+        .await;
     if let Err(err) = user_result {
         error!("Error in database connection: {}", err);
         return StatusCode::UNAUTHORIZED.into_response();

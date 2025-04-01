@@ -1,6 +1,6 @@
-use std::env::args;
+use std::collections::HashMap;
+use std::fs;
 use std::str::FromStr;
-use std::{env, fs};
 
 use axum::body::Body;
 use axum::extract::{Query, State};
@@ -8,28 +8,29 @@ use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::{middleware, routing::get, Router};
 use clap::Parser;
-use id3::TagLike;
 use log::{error, info};
-use md5::Digest;
 use sea_orm::prelude::Uuid;
 use sea_orm::QueryFilter;
-use sea_orm::{
-    ColumnTrait, ConnectOptions, Database, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel,
-};
-use serde::{Deserialize, Serialize};
+use sea_orm::{ColumnTrait, ConnectOptions, Database, DatabaseConnection, DbErr, EntityTrait};
+use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
-use stopwatch::Stopwatch;
+
 use tokio::main;
 use tokio_util::io::ReaderStream;
-use tower_http::cors::{Any, CorsLayer};
-
+use tower_http::cors::CorsLayer;
+use entities::album_local_model::AlbumModel;
+use entities::artist_local_model::ArtistModel;
 use entities::prelude::Song;
 use entities::song;
+use entities::song_local_model::SongModel;
 use migration::{Migrator, MigratorTrait};
 
 use crate::auth_middleware::auth_middleware;
-use crate::endpoint_handlers::{get_album, get_albums, get_artist, get_artists, search};
+use crate::endpoint_handlers::{
+    create_update_playlist, get_album, get_albums, get_artist, get_artists, get_playlist,
+    get_playlists, search,
+};
 
 mod auth_middleware;
 mod database_sync;
@@ -38,11 +39,19 @@ mod explorer;
 mod responses;
 mod tag_parser;
 
-async fn sync(connection: &DatabaseConnection) {
+async fn sync(connection: &DatabaseConnection, path: &str) {
     info!("Gathering paths");
-    let list = explorer::list("E:/Musica", 0).await;
+    let list = explorer::list(path, 0).await;
     info!("Parsing tags");
-    let hashmap = tag_parser::parse(list);
+    let hashmap_result = tag_parser::parse(list);
+    let hashmap;
+    match hashmap_result {
+        Ok(h) => {hashmap = h}
+        Err(_) => {
+            error!("Failed to parse tags");
+            return;
+        }
+    }
     info!("Syncing database");
     let ret = database_sync::sync_database(hashmap, connection).await;
     match ret {
@@ -108,7 +117,7 @@ async fn main() -> Result<(), DbErr> {
         error!("Error connecting to database: {}", err);
         return Ok(());
     }
-    let db = db_result.unwrap();
+    let db = db_result?;
     let pool_result = PgPoolOptions::new()
         .max_connections(5)
         .connect(config.postgres.to_owned().as_str())
@@ -135,6 +144,9 @@ async fn main() -> Result<(), DbErr> {
         .route("/search3", get(search))
         .route("/getAlbumList2", get(get_albums))
         .route("/getAlbum", get(get_album))
+        .route("/getPlaylists", get(get_playlists))
+        .route("/getPlaylist", get(get_playlist))
+        .route("/createPlaylist", get(create_update_playlist))
         .layer(CorsLayer::permissive())
         .layer(middleware::from_fn_with_state(
             state.to_owned(),
@@ -143,13 +155,15 @@ async fn main() -> Result<(), DbErr> {
         .with_state(state.to_owned());
     let app: Router = Router::new()
         .route("/search", get(search))
+        .route("/playlist", get(create_update_playlist))
+        .route("/playlists", get(get_playlists))
         // StartScan
         .route(
             "/startScan",
             get(|| async {
                 tokio::spawn(async move {
                     // `move` makes the closure take ownership of `slf`
-                    sync(&db).await;
+                    sync(&db, &config.path.as_str()).await;
                 });
                 "Syncing. Check console output!"
             }),
