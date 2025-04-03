@@ -1,13 +1,11 @@
 use chrono::Utc;
 use chrono::{self, DateTime, Local};
+use entities::album::{Album, AlbumSqlxModel};
+use entities::artist::{Artist, ArtistSqlxModel};
 use entities::playlist::Playlist;
-use sea_orm::prelude::Uuid;
+use entities::song::SongSqlxModel;
 use serde::Serialize;
-
-use entities::{
-    album, album_local_model::AlbumSqlxModel, artist, artist_local_model::ArtistSqlxModel,
-    song_local_model::SongSqlxModel,
-};
+use uuid::Uuid;
 
 use super::album_response::SongResponseData;
 
@@ -152,10 +150,7 @@ pub struct AlbumList2Item {
 }
 
 impl SubsonicResponse<AlbumList2Response> {
-    pub fn album_list2_from_album_list(
-        list: Vec<album::Model>,
-        artists_list: Vec<artist::Model>,
-    ) -> Self {
+    pub fn album_list2_from_album_list(list: Vec<Album>, artists_list: Vec<Artist>) -> Self {
         let mut ret = Vec::new();
         for item in list {
             // I'm sure I have the artist
@@ -215,7 +210,7 @@ pub struct ArtistResponseItem {
 }
 
 impl SubsonicResponse<ArtistResponse> {
-    pub fn artist_from_album_list(list: Vec<album::Model>, artist: artist::Model) -> Self {
+    pub fn artist_from_album_list(list: Vec<Album>, artist: Artist) -> Self {
         let ret: Vec<AlbumList2Item> = list
             .iter()
             .map(|item| AlbumList2Item {

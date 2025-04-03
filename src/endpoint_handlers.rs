@@ -7,24 +7,14 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::DateTime;
 use chrono::Local;
-use entities::album_local_model::AlbumSqlxModel;
-use entities::artist_local_model::ArtistSqlxModel;
 use entities::playlist::Playlist;
-use entities::song_local_model::SongSqlxModel;
+use entities::song::SongSqlxModel;
 use log::error;
 
 use log::info;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-use sea_orm::prelude::Uuid;
-use sea_orm::QueryFilter;
-use sea_orm::{
-    ColumnTrait, DbBackend, EntityTrait, FromQueryResult, Order, QueryOrder, QuerySelect, Statement,
-};
 use serde::{Deserialize, Serialize};
 
-use entities::prelude::{Album, Artist};
-use entities::{album, artist, song};
+use uuid::Uuid;
 
 use crate::responses::album_response::AlbumResponse;
 use crate::responses::responses::PlaylistResponse;
@@ -56,11 +46,6 @@ pub struct IdQuery {
 #[derive(Deserialize, Serialize)]
 pub struct CountQuery {
     count: Option<i64>,
-}
-
-#[derive(Debug, FromQueryResult)]
-struct IdOnly {
-    id: Uuid,
 }
 
 #[derive(Deserialize, Clone)]
@@ -108,7 +93,7 @@ pub async fn search(
     let query = query_option.unwrap().clone();
 
     let artist_rows = sqlx::query_as!(
-        ArtistSqlxModel,
+        entities::artist::ArtistSqlxModel,
         r#"SELECT
 	*
 FROM "artist"
@@ -124,7 +109,7 @@ order by SIMILARITY(name,$1) desc
     .await
     .unwrap();
     let album_rows = sqlx::query_as!(
-        AlbumSqlxModel,
+        entities::album::AlbumSqlxModel,
         r#"select album.*, artist.name as artist_name
         from album inner join artist on album.artist_id = artist.id
         where SIMILARITY(album.name,$1) > 0.4 or album.name ilike '%' || $1 || '%'
@@ -140,7 +125,7 @@ order by SIMILARITY(name,$1) desc
     .await
     .unwrap();
     let song_rows = sqlx::query_as!(
-        SongSqlxModel,
+        entities::song::SongSqlxModel,
         r#"select song.*, album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
         from song inner join album on song.album_id = album.id
                   inner join artist on album.artist_id = artist.id
@@ -174,7 +159,7 @@ async fn get_db_playlist(
 async fn get_db_songs_playlist(
     State(state): State<DatabaseState>,
     id: Uuid,
-) -> Result<Vec<SongSqlxModel>, sqlx::Error> {
+) -> Result<Vec<entities::song::SongSqlxModel>, sqlx::Error> {
     sqlx::query_as!(
         SongSqlxModel,
         r#"select song.*, album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
@@ -449,10 +434,9 @@ pub async fn get_album(
         return Json(ret).into_response();
     }
 
-    let album_query = album::Entity::find()
-        .filter(album::Column::Id.eq(query_option.unwrap().id))
-        .one(&state.connection)
-        .await;
+    let id = query_option.unwrap().id;
+
+    let album_query = queries::get_album_by_id(&state.pool, id).await;
 
     if let Err(err) = album_query {
         error!("Error fetching album: {}", err);
@@ -471,16 +455,11 @@ pub async fn get_album(
     let album = album_option.unwrap();
 
     // Let's trust the referential integrity
-    let artist = artist::Entity::find_by_id(album.artist_id)
-        .one(&state.connection)
+    let artist = queries::get_artist_by_id(&state.pool, album.artist_id)
         .await
         .unwrap()
         .unwrap();
-    let songs = song::Entity::find()
-        .filter(song::Column::AlbumId.eq(album.id))
-        .order_by(song::Column::DiscNumber, Order::Asc)
-        .order_by(song::Column::Track, Order::Asc)
-        .all(&state.connection)
+    let songs = queries::get_songs_by_album_id(&state.pool, album.id)
         .await
         .unwrap();
     let ret = SubsonicResponse {
@@ -522,81 +501,81 @@ pub async fn get_albums(
         return Json(ret).into_response();
     }
     match query.r#type.as_str() {
-        "random" => {
-            let all_album_ids = IdOnly::find_by_statement(Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                r#"SELECT "album"."id" FROM "album""#,
-                vec![],
-            ))
-            .all(&state.connection)
-            .await;
-            if let Err(err) = all_album_ids {
-                println!("52 {}", err);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-            let mut album_ids: Vec<Uuid> =
-                all_album_ids.unwrap().into_iter().map(|i| i.id).collect();
-            album_ids.shuffle(&mut thread_rng());
-            if query.size.unwrap() < album_ids.len() as i32 {
-                album_ids = album_ids[0..query.size.unwrap() as usize].to_vec();
-            }
-            let albums_query = album::Entity::find()
-                .filter(album::Column::Id.is_in(album_ids))
-                .all(&state.connection)
-                .await;
-            if let Err(err) = albums_query {
-                println!("62 {}", err);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-            let albums: Vec<album::Model> = albums_query.unwrap();
-            let artist_ids = albums
-                .clone()
-                .into_iter()
-                .map(|i| i.artist_id)
-                .collect::<Vec<Uuid>>();
-            let artists_query = artist::Entity::find()
-                .filter(artist::Column::Id.is_in(artist_ids))
-                .all(&state.connection)
-                .await;
-            if let Err(err) = artists_query {
-                println!("69 {}", err);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-            let artists = artists_query.unwrap();
-            let ret =
-                SubsonicResponse::album_list2_from_album_list(albums.clone(), artists.clone());
-            return Json(ret).into_response();
-        }
-        "frequent" | "newest" | "recent" | "alphabeticalByName" => {
-            let albums_query = album::Entity::find()
-                .order_by(album::Column::Name, Order::Asc)
-                .offset(Some(query.offset.unwrap() as u64))
-                .limit(Some(query.size.unwrap() as u64))
-                .all(&state.connection)
-                .await;
-            if let Err(err) = albums_query {
-                println!("62 {}", err);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-            let albums: Vec<album::Model> = albums_query.unwrap();
-            let artist_ids = albums
-                .clone()
-                .into_iter()
-                .map(|i| i.artist_id)
-                .collect::<Vec<Uuid>>();
-            let artists_query = artist::Entity::find()
-                .filter(artist::Column::Id.is_in(artist_ids))
-                .all(&state.connection)
-                .await;
-            if let Err(err) = artists_query {
-                println!("69 {}", err);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-            let artists = artists_query.unwrap();
-            let ret =
-                SubsonicResponse::album_list2_from_album_list(albums.clone(), artists.clone());
-            return Json(ret).into_response();
-        }
+        // "random" => {
+        //     let all_album_ids = IdOnly::find_by_statement(Statement::from_sql_and_values(
+        //         DbBackend::Postgres,
+        //         r#"SELECT "album"."id" FROM "album""#,
+        //         vec![],
+        //     ))
+        //     .all(&state.connection)
+        //     .await;
+        //     if let Err(err) = all_album_ids {
+        //         println!("52 {}", err);
+        //         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        //     }
+        //     let mut album_ids: Vec<Uuid> =
+        //         all_album_ids.unwrap().into_iter().map(|i| i.id).collect();
+        //     album_ids.shuffle(&mut thread_rng());
+        //     if query.size.unwrap() < album_ids.len() as i32 {
+        //         album_ids = album_ids[0..query.size.unwrap() as usize].to_vec();
+        //     }
+        //     let albums_query = album::Entity::find()
+        //         .filter(album::Column::Id.is_in(album_ids))
+        //         .all(&state.connection)
+        //         .await;
+        //     if let Err(err) = albums_query {
+        //         println!("62 {}", err);
+        //         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        //     }
+        //     let albums: Vec<album::Model> = albums_query.unwrap();
+        //     let artist_ids = albums
+        //         .clone()
+        //         .into_iter()
+        //         .map(|i| i.artist_id)
+        //         .collect::<Vec<Uuid>>();
+        //     let artists_query = artist::Entity::find()
+        //         .filter(artist::Column::Id.is_in(artist_ids))
+        //         .all(&state.connection)
+        //         .await;
+        //     if let Err(err) = artists_query {
+        //         println!("69 {}", err);
+        //         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        //     }
+        //     let artists = artists_query.unwrap();
+        //     let ret =
+        //         SubsonicResponse::album_list2_from_album_list(albums.clone(), artists.clone());
+        //     return Json(ret).into_response();
+        // }
+        // "frequent" | "newest" | "recent" | "alphabeticalByName" => {
+        //     let albums_query = album::Entity::find()
+        //         .order_by(album::Column::Name, Order::Asc)
+        //         .offset(Some(query.offset.unwrap() as u64))
+        //         .limit(Some(query.size.unwrap() as u64))
+        //         .all(&state.connection)
+        //         .await;
+        //     if let Err(err) = albums_query {
+        //         println!("62 {}", err);
+        //         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        //     }
+        //     let albums: Vec<album::Model> = albums_query.unwrap();
+        //     let artist_ids = albums
+        //         .clone()
+        //         .into_iter()
+        //         .map(|i| i.artist_id)
+        //         .collect::<Vec<Uuid>>();
+        //     let artists_query = artist::Entity::find()
+        //         .filter(artist::Column::Id.is_in(artist_ids))
+        //         .all(&state.connection)
+        //         .await;
+        //     if let Err(err) = artists_query {
+        //         println!("69 {}", err);
+        //         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        //     }
+        //     let artists = artists_query.unwrap();
+        //     let ret =
+        //         SubsonicResponse::album_list2_from_album_list(albums.clone(), artists.clone());
+        //     return Json(ret).into_response();
+        // }
         _ => {}
     }
     StatusCode::NO_CONTENT.into_response()
@@ -614,10 +593,7 @@ pub async fn get_artist(
         return Json(ret).into_response();
     }
     let query = query_option.unwrap();
-    let artist_result = Artist::find()
-        .filter(artist::Column::Id.eq(query.id))
-        .one(&state.connection)
-        .await;
+    let artist_result = queries::get_artist_by_id(&state.pool, query.id).await;
     if let Err(err) = artist_result {
         error!("Error retrieving data from db: {}", err);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -627,21 +603,17 @@ pub async fn get_artist(
         return StatusCode::NOT_FOUND.into_response();
     }
     let artist = artist.unwrap();
-    let albums_result = Album::find()
-        .filter(album::Column::ArtistId.eq(artist.id))
-        .all(&state.connection)
-        .await;
-    if let Err(err) = albums_result {
-        error!("Error retrieving data from db: {}", err);
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    let albums = albums_result.unwrap();
+    let albums_result = queries::get_albums_by_artist_id(&state.pool, artist.id).await;
+    let albums = match albums_result {
+        Some(a) => a,
+        None => Vec::new(),
+    };
     let ret = SubsonicResponse::artist_from_album_list(albums, artist);
     Json(ret).into_response()
 }
 
 pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoResponse {
-    let artists_result = Artist::find().all(&state.connection).await;
+    let artists_result = queries::get_all_artists(&state.pool).await;
     if let Err(_) = artists_result {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -681,7 +653,7 @@ pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoRespons
                 }],
             );
         } else {
-            let mut vec: &mut Vec<ArtistItem> = artists_hashmap.get_mut(&first_letter).unwrap();
+            let vec: &mut Vec<ArtistItem> = artists_hashmap.get_mut(&first_letter).unwrap();
             vec.push(ArtistItem {
                 id: artist.id,
                 name: artist.name,

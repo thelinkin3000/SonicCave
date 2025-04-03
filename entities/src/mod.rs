@@ -7,6 +7,7 @@ pub mod album_local_model;
 pub mod artist;
 pub mod artist_local_model;
 pub mod playlist;
+pub mod return_id;
 pub mod song;
 pub mod song_local_model;
 pub mod user;
