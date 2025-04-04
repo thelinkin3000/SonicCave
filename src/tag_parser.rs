@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 use std::fs::File;
 
+use entities::album::Album;
+use entities::artist::Artist;
+use entities::song::Song;
 use id3::{Tag, TagLike};
 use log::error;
-use sea_orm::ColIdx;
 use symphonia::core::codecs::CODEC_TYPE_NULL;
 
-use entities::album_local_model::AlbumModel;
-use entities::artist_local_model::ArtistModel;
-use entities::song_local_model::SongModel;
 use symphonia::core::formats::{FormatOptions, Track};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
+use uuid::Uuid;
 
 struct SongTags {
     artist: String,
@@ -29,19 +29,17 @@ struct SongTags {
     disc_number: i32,
 }
 
-pub fn parse(
-    paths: Vec<String>,
-) -> Result<HashMap<ArtistModel, HashMap<AlbumModel, Vec<SongModel>>>, String> {
-    let mut artists_map: HashMap<String, ArtistModel> = HashMap::new();
-    let mut artists_albums_map: HashMap<ArtistModel, HashMap<AlbumModel, Vec<SongModel>>> =
-        HashMap::new();
+pub fn parse(paths: Vec<String>) -> Result<HashMap<Artist, HashMap<Album, Vec<Song>>>, String> {
+    let mut artists_map: HashMap<String, Artist> = HashMap::new();
+    let mut artists_albums_map: HashMap<Artist, HashMap<Album, Vec<Song>>> = HashMap::new();
     println!("{}", paths.capacity());
     for item in paths {
         let tag_result: Option<SongTags> = tag(item.as_str());
         match tag_result {
             Some(song_tags) => {
-                let artist_model: ArtistModel;
-                artist_model = ArtistModel {
+                let artist_model: Artist;
+                artist_model = Artist {
+                    id: Uuid::nil(),
                     name: song_tags.artist.to_owned(),
                     album_count: 0,
                 };
@@ -51,7 +49,8 @@ pub fn parse(
                     artists_albums_map.insert(artist_model.clone(), HashMap::new());
                 }
 
-                let album_model = AlbumModel {
+                let album_model = Album {
+                    id: Uuid::nil(),
                     name: song_tags.album.to_owned(),
                     year: song_tags.year.to_owned(),
                     artist_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000")
@@ -70,7 +69,8 @@ pub fn parse(
                         .unwrap()
                         .insert(album_model.to_owned(), Vec::new());
                 }
-                let song_model: SongModel = SongModel {
+                let song_model: Song = Song {
+                    id: Uuid::nil(),
                     title: song_tags.title.to_owned(),
                     duration: song_tags.duration.to_owned(),
                     track: song_tags.track.to_owned(),

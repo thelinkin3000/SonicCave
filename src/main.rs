@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::str::FromStr;
 
@@ -9,9 +8,6 @@ use axum::response::IntoResponse;
 use axum::{middleware, routing::get, Router};
 use clap::Parser;
 use log::{error, info};
-use sea_orm::prelude::Uuid;
-use sea_orm::QueryFilter;
-use sea_orm::{ColumnTrait, ConnectOptions, Database, DatabaseConnection, DbErr, EntityTrait};
 use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
@@ -19,12 +15,7 @@ use sqlx::{Pool, Postgres};
 use tokio::main;
 use tokio_util::io::ReaderStream;
 use tower_http::cors::CorsLayer;
-use entities::album_local_model::AlbumModel;
-use entities::artist_local_model::ArtistModel;
-use entities::prelude::Song;
-use entities::song;
-use entities::song_local_model::SongModel;
-use migration::{Migrator, MigratorTrait};
+use uuid::Uuid;
 
 use crate::auth_middleware::auth_middleware;
 use crate::endpoint_handlers::{
@@ -39,14 +30,14 @@ mod explorer;
 mod responses;
 mod tag_parser;
 
-async fn sync(connection: &DatabaseConnection, path: &str) {
+async fn sync(connection: &mut Pool<Postgres>, path: &str) {
     info!("Gathering paths");
-    let list = explorer::list(path, 0).await;
+    let list = explorer::list(path, 0, true).await;
     info!("Parsing tags");
     let hashmap_result = tag_parser::parse(list);
     let hashmap;
     match hashmap_result {
-        Ok(h) => {hashmap = h}
+        Ok(h) => hashmap = h,
         Err(_) => {
             error!("Failed to parse tags");
             return;
@@ -64,7 +55,6 @@ async fn sync(connection: &DatabaseConnection, path: &str) {
 
 #[derive(Clone)]
 pub struct DatabaseState {
-    connection: DatabaseConnection,
     pool: Pool<Postgres>,
 }
 
@@ -87,7 +77,7 @@ struct Config {
 }
 
 #[main]
-async fn main() -> Result<(), DbErr> {
+async fn main() -> Result<(), sqlx::Error> {
     let args = Args::parse();
     stderrlog::new()
         .verbosity(args.verbosity)
@@ -109,15 +99,6 @@ async fn main() -> Result<(), DbErr> {
         return Ok(());
     }
     let config: Config = config_result.unwrap();
-    let mut connection_options = ConnectOptions::new(config.postgres.to_owned());
-    connection_options.sqlx_logging_level(log::LevelFilter::Trace); // Or set SQLx log level
-                                                                    // Create a database connection
-    let db_result = Database::connect(connection_options).await;
-    if let Err(err) = db_result {
-        error!("Error connecting to database: {}", err);
-        return Ok(());
-    }
-    let db = db_result?;
     let pool_result = PgPoolOptions::new()
         .max_connections(5)
         .connect(config.postgres.to_owned().as_str())
@@ -126,12 +107,10 @@ async fn main() -> Result<(), DbErr> {
         error!("Error connecting to database: {}", err);
         return Ok(());
     }
-    let pool = pool_result.unwrap();
+    let mut pool = pool_result.unwrap();
     let state = DatabaseState {
-        connection: db.to_owned(),
         pool: pool.to_owned(),
     };
-    Migrator::up(&db, None).await?;
     // build our application with a single route
 
     let authenticated: Router = Router::new()
@@ -163,7 +142,7 @@ async fn main() -> Result<(), DbErr> {
             get(|| async {
                 tokio::spawn(async move {
                     // `move` makes the closure take ownership of `slf`
-                    sync(&db, &config.path.as_str()).await;
+                    sync(&mut pool, &config.path.as_str()).await;
                 });
                 "Syncing. Check console output!"
             }),
@@ -225,10 +204,7 @@ async fn get_stream(
     }
     let id = query.unwrap().id;
 
-    let song_result = Song::find()
-        .filter(song::Column::Id.eq(id))
-        .one(&state.connection)
-        .await;
+    let song_result = queries::get_song_by_id(&state.pool, id).await;
 
     if let Err(_) = song_result {
         return Err((

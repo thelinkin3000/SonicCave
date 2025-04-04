@@ -4,12 +4,8 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use log::{error, warn};
 use md5::{Digest, Md5};
-use sea_orm::ColumnTrait;
-use sea_orm::EntityTrait;
-use sea_orm::QueryFilter;
 use serde::Deserialize;
 
-use entities::prelude::User;
 use entities::user;
 
 use crate::DatabaseState;
@@ -45,10 +41,7 @@ pub async fn auth_middleware(
 ) -> Response {
     // do something with `request`...
     let owned_auth = auth.unwrap_or_default().to_owned();
-    let user_result = User::find()
-        .filter(user::Column::Username.eq(&owned_auth.u))
-        .one(&state.connection)
-        .await;
+    let user_result = queries::get_user_by_username(&state.pool, &owned_auth.u).await;
     if let Err(err) = user_result {
         error!("Error in database connection: {}", err);
         return StatusCode::UNAUTHORIZED.into_response();
