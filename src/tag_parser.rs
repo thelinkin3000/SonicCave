@@ -29,12 +29,14 @@ struct SongTags {
     disc_number: i32,
 }
 
-pub fn parse(paths: Vec<String>) -> Result<HashMap<Artist, HashMap<Album, Vec<Song>>>, String> {
+pub fn parse(
+    paths: Vec<(String, crate::explorer::TagType)>,
+) -> Result<HashMap<Artist, HashMap<Album, Vec<Song>>>, String> {
     let mut artists_map: HashMap<String, Artist> = HashMap::new();
     let mut artists_albums_map: HashMap<Artist, HashMap<Album, Vec<Song>>> = HashMap::new();
     println!("{}", paths.capacity());
     for item in paths {
-        let tag_result: Option<SongTags> = tag(item.as_str());
+        let tag_result: Option<SongTags> = tag(&item.0, item.1);
         match tag_result {
             Some(song_tags) => {
                 let artist_model: Artist;
@@ -96,7 +98,7 @@ pub fn parse(paths: Vec<String>) -> Result<HashMap<Artist, HashMap<Album, Vec<So
     Ok(artists_albums_map)
 }
 
-fn tag(path: &str) -> Option<SongTags> {
+fn tag_id3(path: &str) -> Option<SongTags> {
     let tag_result = Tag::read_from_path(path);
     let this_tag: Option<Tag>;
     match tag_result {
@@ -136,6 +138,74 @@ fn tag(path: &str) -> Option<SongTags> {
         return Some(song);
     }
     None
+}
+
+fn parse_vorbis_comment(tag: &metaflac::Tag, tag_name: &str) -> String {
+    let comment_vec_opt = tag.get_vorbis(tag_name);
+    if let None = comment_vec_opt {
+        return "".to_string();
+    }
+    let mut comment_vec = comment_vec_opt.unwrap();
+    let comment = comment_vec.next();
+    match comment {
+        Some(c) => c,
+        None => "",
+    }
+    .to_string()
+}
+
+fn parse_vorbis_comment_integer(tag: &metaflac::Tag, tag_name: &str) -> i32 {
+    let track_str = parse_vorbis_comment(&tag, tag_name);
+    match track_str.as_str() {
+        "" => 0,
+        s => s.parse().unwrap_or(0),
+    }
+}
+fn tag_flac(path: &str) -> Option<SongTags> {
+    let tag_result = metaflac::Tag::read_from_path(path);
+    let this_tag: Option<metaflac::Tag>;
+    match tag_result {
+        Err(_) => return None,
+        Ok(tag) => this_tag = Some(tag),
+    }
+
+    if let Some(tag) = this_tag {
+        let path_split = path.split('.').into_iter();
+        let suffix = path_split.clone().last().unwrap_or("");
+        let metadata_option = get_metadata(path.to_string(), suffix.to_string());
+        let (duration, suffix): (i32, String) = match metadata_option {
+            Some(metadata) => (metadata.0.seconds as i32, metadata.1.to_string()),
+            None => (0, suffix.to_string()),
+        };
+        let artist = parse_vorbis_comment(&tag, &"ALBUMARTIST");
+        let album = parse_vorbis_comment(&tag, &"ALBUM");
+        let title = parse_vorbis_comment(&tag, &"TITLE");
+        let genre = parse_vorbis_comment(&tag, &"GENRE");
+        let track = parse_vorbis_comment_integer(&tag, &"TRACK");
+        let year = parse_vorbis_comment_integer(&tag, &"YEAR");
+        let disc_number = parse_vorbis_comment_integer(&tag, &"DISCNUMBER");
+        let song = SongTags {
+            artist: str::replace(&artist, char::from(0), "?"),
+            album: str::replace(&album, char::from(0), "?"),
+            duration,
+            track,
+            year,
+            title: str::replace(&title, char::from(0), "?"),
+            path: path.to_string(),
+            genre: str::replace(&genre, char::from(0), "?"),
+            suffix: suffix.to_string(),
+            content_type: format!("audio/{}", suffix),
+            disc_number,
+        };
+        return Some(song);
+    }
+    None
+}
+fn tag(path: &str, t: crate::explorer::TagType) -> Option<SongTags> {
+    match t {
+        crate::explorer::TagType::Id3 => tag_id3(path),
+        crate::explorer::TagType::Flac => tag_flac(path),
+    }
 }
 
 fn get_metadata(path: String, suffix: String) -> Option<(Time, String)> {

@@ -1,4 +1,4 @@
-workspace = { members = [ "entities", "migration", "queries"] }
+workspace = { members = [ "entities", "queries"] }
 [package]
 name = "soniccave"
 version = "0.1.0"
@@ -6,11 +6,11 @@ edition = "2021"
 
 [dependencies]
 id3 = "1.12.0"
+metaflac = "0.2.8"
 tokio = { version = "1.35.1", features = ["full"] }
 async-recursion = "1.0.5"
 sqlx = { version = "0.7", features = ["runtime-tokio", "chrono", "postgres"] }
 entities = { path = "entities" }
-migration = { path = "migration" }
 queries = { path = "queries" }
 axum = { version="0.7.4", features = ["macros"]}
 axum-extra = {version = "0.9.2", features = ["query"]}
@@ -29,4 +29,5 @@ log = "0.4.20"
 symphonia = { version= "0.5.3", features = ["all"] }
 serde_json = "1.0.111"
 stopwatch = "0.0.7"
+blake3 = "1.8.1"
 

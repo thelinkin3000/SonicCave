@@ -17,6 +17,7 @@ pub struct Song {
     pub album_id: Uuid,
     pub disc_number: i32,
 }
+
 #[derive(FromRow, PartialEq, Eq, Hash, Clone, Debug, Serialize)]
 pub struct SongSqlxModel {
     pub title: String,
