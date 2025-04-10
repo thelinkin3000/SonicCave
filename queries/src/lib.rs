@@ -1,6 +1,21 @@
 use entities::{album::Album, artist::Artist, song::Song, user::User};
 use log::error;
 use sqlx::{Pool, Postgres, types::Uuid};
+pub struct SongPath {
+    path: String,
+}
+
+pub async fn get_song_paths(pool: &Pool<Postgres>) -> Result<Vec<String>, sqlx::Error> {
+    let ret: Result<Vec<SongPath>, sqlx::Error> =
+        sqlx::query_as!(SongPath, "select path from song;")
+            .fetch_all(pool)
+            .await;
+    if let Err(e) = ret {
+        return Err(e);
+    }
+    let res: Vec<String> = ret.unwrap().into_iter().map(|s| s.path).collect();
+    return Ok(res);
+}
 
 pub async fn search_artists_paginated(
     pool: &Pool<Postgres>,
@@ -121,6 +136,14 @@ pub async fn get_artist_by_id(
         .fetch_optional(pool)
         .await
 }
+pub async fn get_artist_by_name(
+    pool: &Pool<Postgres>,
+    artist_name: &String,
+) -> Result<Option<Artist>, sqlx::Error> {
+    sqlx::query_as!(Artist, "select * from artist where name = $1", artist_name)
+        .fetch_optional(pool)
+        .await
+}
 pub async fn delete_artist_by_id(
     pool: &Pool<Postgres>,
     artist_id: Uuid,
@@ -136,7 +159,36 @@ pub async fn delete_artist_by_id(
 pub struct ReturnId {
     pub id: Uuid,
 }
-
+pub async fn prune_songs(pool: &Pool<Postgres>, paths: &Vec<String>) -> Result<(), sqlx::Error> {
+    let mut ret = sqlx::query!(
+        "delete from playlist_items where song_id in (select id from song where path = ANY($1))",
+        paths
+    )
+    .execute(pool)
+    .await;
+    if let Err(e) = ret {
+        return Err(e);
+    }
+    ret = sqlx::query!("delete from song where path =ANY($1)", paths)
+        .execute(pool)
+        .await;
+    if let Err(e) = ret {
+        return Err(e);
+    }
+    ret = sqlx::query!("delete from album where id not in (select distinct album_id from song)")
+        .execute(pool)
+        .await;
+    if let Err(e) = ret {
+        return Err(e);
+    }
+    ret = sqlx::query!("delete from artist where id not in (select distinct artist_id from album)")
+        .execute(pool)
+        .await;
+    if let Err(e) = ret {
+        return Err(e);
+    }
+    return Ok(());
+}
 pub async fn add_artist(pool: &Pool<Postgres>, artist: &Artist) -> Result<Uuid, sqlx::Error> {
     let ret = sqlx::query_as! {
         ReturnId,

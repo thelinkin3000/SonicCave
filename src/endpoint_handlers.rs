@@ -126,7 +126,9 @@ order by SIMILARITY(name,$1) desc
     .unwrap();
     let song_rows = sqlx::query_as!(
         entities::song::SongSqlxModel,
-        r#"select song.*, album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
+        r#"select song.id, song.title,song.path,song.genre,song.suffix,song.content_type,song.track,
+        song.duration, song.album_id, song.disc_number,
+         album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
         from song inner join album on song.album_id = album.id
                   inner join artist on album.artist_id = artist.id
         where SIMILARITY(song.title,$1) > 0.4 or song.title ilike '%' || $1 || '%'
@@ -162,7 +164,9 @@ async fn get_db_songs_playlist(
 ) -> Result<Vec<entities::song::SongSqlxModel>, sqlx::Error> {
     sqlx::query_as!(
         SongSqlxModel,
-        r#"select song.*, album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
+        r#"select song.id, song.title,song.path,song.genre,song.suffix,song.content_type,song.track,
+        song.duration, song.album_id, song.disc_number,
+         album.name as album_name, artist.name as artist_name, album.year, artist.id as artist_id
         from song inner join album on song.album_id = album.id
                   inner join artist on album.artist_id = artist.id
          where song.id in (

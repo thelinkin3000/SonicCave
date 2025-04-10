@@ -1,4 +1,5 @@
 use std::fs;
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 use axum::body::Body;
@@ -9,6 +10,7 @@ use axum::{middleware, routing::get, Router};
 use clap::Parser;
 use log::{error, info};
 use serde::Deserialize;
+use sqlx::migrate::MigrateError;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 
@@ -32,7 +34,14 @@ mod tag_parser;
 
 async fn sync(connection: &mut Pool<Postgres>, path: &str) {
     info!("Gathering paths");
-    let list = explorer::list(path, 0, true).await;
+    let song_paths_ret = queries::get_song_paths(connection).await;
+    if let Err(e) = song_paths_ret {
+        error!("There was an error reading from the database. {e}");
+        return;
+    }
+    let mut song_paths = song_paths_ret.unwrap();
+    song_paths.sort();
+    let list = explorer::list(path, 0, true, &mut song_paths).await;
     info!("Parsing tags");
     let hashmap_result = tag_parser::parse(list);
     let hashmap;
@@ -44,7 +53,7 @@ async fn sync(connection: &mut Pool<Postgres>, path: &str) {
         }
     }
     info!("Syncing database");
-    let ret = database_sync::sync_database(hashmap, connection).await;
+    let ret = database_sync::sync_database(hashmap, &mut song_paths, connection).await;
     match ret {
         Ok(_) => {}
         Err(error) => {
@@ -111,6 +120,12 @@ async fn main() -> Result<(), sqlx::Error> {
     let state = DatabaseState {
         pool: pool.to_owned(),
     };
+
+    info!("Running migrations...");
+    let migration_result = migrate(&pool).await;
+    if let Err(e) = migration_result {
+        error!("There was an error runing migrations: {e}");
+    }
     // build our application with a single route
 
     let authenticated: Router = Router::new()
@@ -178,11 +193,16 @@ async fn main() -> Result<(), sqlx::Error> {
    +*********************************************************************=
  .+***********************************************************************+."#
     );
-    info!("Listening on 0.0.0.0: {}", config.port);
+    info!("Listening on 0.0.0.0:{}", config.port);
     info!("Welcome to SonicCave!");
 
     // run our app with hyper, listening globally on port 3000
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind((
+        Ipv4Addr::new(0, 0, 0, 0),
+        u16::try_from(config.port).unwrap(),
+    ))
+    .await
+    .unwrap();
     Ok(axum::serve(listener, app).await.unwrap())
 }
 
@@ -241,4 +261,8 @@ async fn get_stream(
     ];
 
     Ok((headers, body))
+}
+
+async fn migrate(pool: &Pool<Postgres>) -> Result<(), MigrateError> {
+    sqlx::migrate!("./migrations").run(pool).await
 }
