@@ -83,7 +83,7 @@ pub async fn search(
     State(state): State<DatabaseState>,
     query_option: Option<Query<SearchQuery>>,
 ) -> impl IntoResponse {
-    if let None = query_option {
+    if query_option.is_none() {
         let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
             10,
             r#"required parameter "query" is missing"#.to_string(),
@@ -183,7 +183,7 @@ pub async fn get_playlist(
     axum_state: State<DatabaseState>,
     id_query_option: Option<Query<IdQuery>>,
 ) -> impl IntoResponse {
-    if let None = id_query_option {
+    if id_query_option.is_none() {
         let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
             10,
             r#"required parameter "id" is missing"#.to_string(),
@@ -192,12 +192,9 @@ pub async fn get_playlist(
     }
     let id_query = id_query_option.unwrap();
     let playlist_result = get_db_playlist(axum_state.to_owned(), id_query.id).await;
-    match playlist_result {
-        Err(err) => {
-            error!("{}", err);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        _ => (),
+    if let Err(err) = playlist_result {
+        error!("{}", err);
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     let songs_result = get_db_songs_playlist(axum_state.to_owned(), id_query.id).await;
     if let Err(err) = songs_result {
@@ -231,7 +228,7 @@ pub async fn create_update_playlist(
     query_option: Option<axum_extra::extract::Query<CreatePlaylistQuery>>,
 ) -> impl IntoResponse {
     let State(state) = axum_state.to_owned();
-    if let None = query_option {
+    if query_option.is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
     let query = query_option.unwrap();
@@ -239,7 +236,7 @@ pub async fn create_update_playlist(
     if q.name.is_none() && q.playlist_id.is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    if let None = q.playlist_id {
+    if q.playlist_id.is_none() {
         let ids = q.song_id.unwrap();
         let name = q.name.unwrap().to_owned();
         let playlist_insert_result = create_playlist(name, ids.to_owned(), &state.to_owned()).await;
@@ -386,7 +383,7 @@ async fn create_playlist(
 
     let songs = songs_result.unwrap();
     let song_count = songs.count.unwrap();
-    if song_count != song_ids.to_owned().into_iter().count() as i64 {
+    if song_count != song_ids.len() as i64 {
         return Err("At least one song id was not in the database");
     }
     let insert_result = sqlx::query_as!(
@@ -416,7 +413,7 @@ async fn create_playlist(
         modified_vec,
         song_ids.to_owned(),
         order,
-        &state,
+        state,
     )
     .await;
     if let Err(err) = insert_songs_result {
@@ -430,7 +427,7 @@ pub async fn get_album(
     State(state): State<DatabaseState>,
     query_option: Option<Query<IdQuery>>,
 ) -> impl IntoResponse {
-    if let None = query_option {
+    if query_option.is_none() {
         let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
             10,
             r#"required parameter "id" is missing"#.to_string(),
@@ -449,7 +446,7 @@ pub async fn get_album(
 
     let album_option = album_query.unwrap();
 
-    if let None = album_option {
+    if album_option.is_none() {
         let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
             10,
             r#"resource with provided id does not exist"#.to_string(),
@@ -589,7 +586,7 @@ pub async fn get_artist(
     State(state): State<DatabaseState>,
     query_option: Option<Query<IdQuery>>,
 ) -> impl IntoResponse {
-    if let None = query_option {
+    if query_option.is_none() {
         let ret: SubsonicResponse<ErrorResponse> = SubsonicResponse::from_error_code(
             10,
             r#"required parameter "id" is missing"#.to_string(),
@@ -603,22 +600,19 @@ pub async fn get_artist(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     let artist = artist_result.unwrap();
-    if let None = artist {
+    if artist.is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
     let artist = artist.unwrap();
     let albums_result = queries::get_albums_by_artist_id(&state.pool, artist.id).await;
-    let albums = match albums_result {
-        Some(a) => a,
-        None => Vec::new(),
-    };
+    let albums = albums_result.unwrap_or_default();
     let ret = SubsonicResponse::artist_from_album_list(albums, artist);
     Json(ret).into_response()
 }
 
 pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoResponse {
     let artists_result = queries::get_all_artists(&state.pool).await;
-    if let Err(_) = artists_result {
+    if artists_result.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let artists = artists_result.unwrap();
@@ -638,24 +632,20 @@ pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoRespons
             .trim_start_matches("El ")
             .trim_start_matches("The ");
 
-        let first_letter;
-        if name.len() > 0 {
+        let first_letter = if !name.is_empty() {
             let char_index = name.char_indices().nth(1).unwrap_or((1, ' ')).0;
-            first_letter = name[0..char_index].to_uppercase().clone();
+            name[0..char_index].to_uppercase().clone()
         } else {
-            first_letter = "".to_string();
-        }
+            "".to_string()
+        };
 
-        if !artists_hashmap.contains_key(&first_letter) {
-            artists_hashmap.insert(
-                first_letter,
-                vec![ArtistItem {
+        if let std::collections::hash_map::Entry::Vacant(e) = artists_hashmap.entry(first_letter.to_owned()) {
+            e.insert(vec![ArtistItem {
                     id: artist.id,
                     name: artist.name,
                     album_count: 0,
                     artist_image_url: "".to_string(),
-                }],
-            );
+                }]);
         } else {
             let vec: &mut Vec<ArtistItem> = artists_hashmap.get_mut(&first_letter).unwrap();
             vec.push(ArtistItem {
@@ -665,7 +655,8 @@ pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoRespons
                 artist_image_url: "".to_string(),
             });
         }
-    }
+        }
+    
     let mut artists_endpoint_response: ArtistsEndpointResponse = ArtistsEndpointResponse {
         status: "ok".to_string(),
         version: "1.1.16".to_string(),
@@ -673,7 +664,7 @@ pub async fn get_artists(State(state): State<DatabaseState>) -> impl IntoRespons
         server_version: "0.0.1".to_string(),
         artists: ArtistsEndpointResponseIndex { index: vec![] },
     };
-    let mut keys: Vec<&String> = artists_hashmap.keys().into_iter().collect::<Vec<&String>>();
+    let mut keys: Vec<&String> = artists_hashmap.keys().collect::<Vec<&String>>();
     keys.sort();
     for artist_key in keys {
         let mut artists_vec = artists_hashmap.get(artist_key).unwrap().to_vec();

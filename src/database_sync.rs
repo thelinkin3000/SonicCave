@@ -20,14 +20,10 @@ pub async fn handle_album(
             s.album_id = album_id;
         }
         let ret = queries::add_songs(conn, &cloned).await;
-        if let Err(e) = ret {
-            return Err(e);
-        }
+        ret?
     } else {
         let ret = queries::add_album(conn, Some(artist_id), album, songs).await;
-        if let Err(e) = ret {
-            return Err(e);
-        }
+        ret?
     }
     Ok(())
 }
@@ -39,16 +35,12 @@ pub async fn sync_database(
 ) -> Result<(), sqlx::Error> {
     let disk_artists: Vec<&Artist> = hashmap_to_add.keys().to_owned().collect();
     for disk_artist in disk_artists {
-        let db_artist_result = queries::get_artist_by_name(conn, &disk_artist.name).await;
-        if let Err(e) = db_artist_result {
-            return Err(e);
-        }
-        let db_artist_opt = db_artist_result.unwrap();
-        match db_artist_opt {
+        let db_artist = queries::get_artist_by_name(conn, &disk_artist.name).await?;
+        match db_artist {
             Some(artist) => {
                 // Existing artist
                 let albums = hashmap_to_add.get(disk_artist).unwrap();
-                let db_albums = queries::get_albums_by_artist_id(&conn, artist.id)
+                let db_albums = queries::get_albums_by_artist_id(conn, artist.id)
                     .await
                     .unwrap_or(Vec::new())
                     .into_iter();
@@ -58,26 +50,16 @@ pub async fn sync_database(
                         Some(a) => Some(a.id),
                         None => None,
                     };
-                    let add_result = handle_album(conn, artist.id, album_id, album, songs).await;
-                    if let Err(e) = add_result {
-                        return Err(e);
-                    }
+                    handle_album(conn, artist.id, album_id, album, songs).await?;
                 }
             }
             None => {
                 // New Artist
                 let artist_id_result = queries::add_artist(conn, disk_artist).await;
-                if let Err(e) = artist_id_result {
-                    return Err(e);
-                }
-                let artist_id = artist_id_result.unwrap();
+                let artist_id = artist_id_result?;
                 let albums = hashmap_to_add.get(disk_artist).unwrap();
                 for (album, songs) in albums {
-                    let query_result =
-                        queries::add_album(conn, Some(artist_id), album, songs).await;
-                    if let Err(e) = query_result {
-                        return Err(e);
-                    }
+                    queries::add_album(conn, Some(artist_id), album, songs).await?;
                 }
             }
         }

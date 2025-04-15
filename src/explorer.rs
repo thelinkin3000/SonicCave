@@ -66,7 +66,7 @@ pub async fn list(
 }
 
 pub fn parse_flac(path: &String) -> bool {
-    let tag_result = metaflac::Tag::read_from_path(&path);
+    let tag_result = metaflac::Tag::read_from_path(path);
     match tag_result {
         Ok(_) => true,
         Err(_) => {
@@ -77,7 +77,7 @@ pub fn parse_flac(path: &String) -> bool {
 }
 
 pub fn parse_id3(path: &String) -> bool {
-    let tag_result = id3::Tag::read_from_path(&path);
+    let tag_result = id3::Tag::read_from_path(path);
     match tag_result {
         Ok(_) => true,
         Err(_) => {

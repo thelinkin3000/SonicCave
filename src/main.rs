@@ -44,16 +44,16 @@ async fn sync(connection: &mut Pool<Postgres>, path: &str) {
     let list = explorer::list(path, 0, true, &mut song_paths).await;
     info!("Parsing tags");
     let hashmap_result = tag_parser::parse(list);
-    let hashmap;
-    match hashmap_result {
-        Ok(h) => hashmap = h,
+
+    let hashmap = match hashmap_result {
+        Ok(h) => h,
         Err(_) => {
             error!("Failed to parse tags");
             return;
         }
-    }
+    };
     info!("Syncing database");
-    let ret = database_sync::sync_database(hashmap, &mut song_paths, connection).await;
+    let ret = database_sync::sync_database(hashmap, &song_paths, connection).await;
     match ret {
         Ok(_) => {}
         Err(error) => {
@@ -157,7 +157,7 @@ async fn main() -> Result<(), sqlx::Error> {
             get(|| async {
                 tokio::spawn(async move {
                     // `move` makes the closure take ownership of `slf`
-                    sync(&mut pool, &config.path.as_str()).await;
+                    sync(&mut pool, config.path.as_str()).await;
                 });
                 "Syncing. Check console output!"
             }),
@@ -203,7 +203,8 @@ async fn main() -> Result<(), sqlx::Error> {
     ))
     .await
     .unwrap();
-    Ok(axum::serve(listener, app).await.unwrap())
+    axum::serve(listener, app).await.unwrap();
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -216,7 +217,7 @@ async fn get_stream(
     query: Option<Query<IdQuery>>,
     State(state): State<DatabaseState>,
 ) -> impl IntoResponse {
-    if let None = query {
+    if query.is_none() {
         return Err((
             StatusCode::NOT_FOUND,
             "No id of resource provided".to_string(),
@@ -226,14 +227,14 @@ async fn get_stream(
 
     let song_result = queries::get_song_by_id(&state.pool, id).await;
 
-    if let Err(_) = song_result {
+    if song_result.is_err() {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "Error connecting to database".to_string(),
         ));
     }
     let song_option = song_result.unwrap();
-    if let None = song_option {
+    if song_option.is_none() {
         return Err((
             StatusCode::NOT_FOUND,
             "No song matching provided id".to_string(),

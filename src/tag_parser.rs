@@ -37,74 +37,71 @@ pub fn parse(
     println!("{}", paths.capacity());
     for item in paths {
         let tag_result: Option<SongTags> = tag(&item.0, item.1);
-        match tag_result {
-            Some(song_tags) => {
-                let artist_model: Artist;
-                artist_model = Artist {
-                    id: Uuid::nil(),
-                    name: song_tags.artist.to_owned(),
-                    album_count: 0,
-                };
-                // If we come across this artist for the first time we push it to the artists hashmap
-                if !artists_map.contains_key(&song_tags.artist) {
-                    artists_map.insert(song_tags.artist.to_owned(), artist_model.to_owned());
-                    artists_albums_map.insert(artist_model.clone(), HashMap::new());
-                }
-
-                let album_model = Album {
-                    id: Uuid::nil(),
-                    name: song_tags.album.to_owned(),
-                    year: song_tags.year.to_owned(),
-                    artist_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000")
-                        .unwrap(),
-                    song_count: 0,
-                };
-
-                // If we don't already have this album, we add it
-                if !artists_albums_map
-                    .get(&artist_model)
-                    .unwrap()
-                    .contains_key(&album_model)
-                {
-                    artists_albums_map
-                        .get_mut(&artist_model)
-                        .unwrap()
-                        .insert(album_model.to_owned(), Vec::new());
-                }
-                let song_model: Song = Song {
-                    id: Uuid::nil(),
-                    title: song_tags.title.to_owned(),
-                    duration: song_tags.duration.to_owned(),
-                    track: song_tags.track.to_owned(),
-                    album_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000")
-                        .unwrap(),
-                    path: song_tags.path,
-                    genre: song_tags.genre,
-                    suffix: song_tags.suffix,
-                    content_type: song_tags.content_type,
-                    disc_number: song_tags.disc_number,
-                };
-
-                artists_albums_map
-                    .get_mut(&artist_model)
-                    .unwrap()
-                    .get_mut(&album_model.to_owned())
-                    .unwrap()
-                    .push(song_model);
-            }
-            None => {}
+        if tag_result.is_none() {
+            continue;
         }
+        let song_tags = tag_result.unwrap();
+
+        let artist_model: Artist = Artist {
+            id: Uuid::nil(),
+            name: song_tags.artist.to_owned(),
+            album_count: 0,
+        };
+        // If we come across this artist for the first time we push it to the artists hashmap
+        if !artists_map.contains_key(&song_tags.artist) {
+            artists_map.insert(song_tags.artist.to_owned(), artist_model.to_owned());
+            artists_albums_map.insert(artist_model.clone(), HashMap::new());
+        }
+
+        let album_model = Album {
+            id: Uuid::nil(),
+            name: song_tags.album.to_owned(),
+            year: song_tags.year.to_owned(),
+            artist_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap(),
+            song_count: 0,
+        };
+
+        // If we don't already have this album, we add it
+        if !artists_albums_map
+            .get(&artist_model)
+            .unwrap()
+            .contains_key(&album_model)
+        {
+            artists_albums_map
+                .get_mut(&artist_model)
+                .unwrap()
+                .insert(album_model.to_owned(), Vec::new());
+        }
+        let song_model: Song = Song {
+            id: Uuid::nil(),
+            title: song_tags.title.to_owned(),
+            duration: song_tags.duration.to_owned(),
+            track: song_tags.track.to_owned(),
+            album_id: uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap(),
+            path: song_tags.path,
+            genre: song_tags.genre,
+            suffix: song_tags.suffix,
+            content_type: song_tags.content_type,
+            disc_number: song_tags.disc_number,
+        };
+
+        artists_albums_map
+            .get_mut(&artist_model)
+            .unwrap()
+            .get_mut(&album_model.to_owned())
+            .unwrap()
+            .push(song_model);
     }
     Ok(artists_albums_map)
 }
 
 fn tag_id3(path: &str) -> Option<SongTags> {
     let tag_result = Tag::read_from_path(path);
-    let this_tag: Option<Tag>;
-    match tag_result {
+
+    let this_tag: Option<Tag> = match tag_result {
         Err(_) => return None,
-        Ok(tag) => this_tag = Some(tag),
-    }
+        Ok(tag) => Some(tag),
+    };
 
     if let Some(tag) = this_tag {
         let path_split = path.split('.');
@@ -113,26 +110,26 @@ fn tag_id3(path: &str) -> Option<SongTags> {
             .nth(path_split.into_iter().collect::<Vec<_>>().len() - 1)
             .unwrap_or("");
         let mut metadata_option = get_metadata(path.to_string(), suffix.to_string());
-        if let None = metadata_option {
+        if metadata_option.is_none() {
             // We have a tag but can't decode this.
             metadata_option = Some((Time::from(tag.duration().unwrap_or(0)), suffix.to_string()));
         }
         let metadata = metadata_option?;
-        let artist = tag.album_artist().unwrap_or_else(|| "");
-        let album = tag.album().unwrap_or_else(|| "");
-        let title = tag.title().unwrap_or_else(|| "");
-        let genre = tag.genre().unwrap_or_else(|| "");
+        let artist = tag.album_artist().unwrap_or("");
+        let album = tag.album().unwrap_or("");
+        let title = tag.title().unwrap_or("");
+        let genre = tag.genre().unwrap_or("");
         let song = SongTags {
             artist: str::replace(artist, char::from(0), "?"),
             album: str::replace(album, char::from(0), "?"),
             duration: metadata.0.seconds as i32,
-            track: tag.track().unwrap_or_else(|| 0) as i32,
-            year: tag.year().unwrap_or_else(|| 0),
+            track: tag.track().unwrap_or(0) as i32,
+            year: tag.year().unwrap_or(0),
             title: str::replace(title, char::from(0), "?"),
             path: path.to_string(),
             genre: str::replace(genre, char::from(0), "?"),
             suffix: suffix.to_string(),
-            content_type: format!("audio/{}", metadata.1.to_string()),
+            content_type: format!("audio/{}", metadata.1),
             disc_number: tag.disc().unwrap_or(1) as i32,
         };
         return Some(song);
@@ -142,20 +139,16 @@ fn tag_id3(path: &str) -> Option<SongTags> {
 
 fn parse_vorbis_comment(tag: &metaflac::Tag, tag_name: &str) -> String {
     let comment_vec_opt = tag.get_vorbis(tag_name);
-    if let None = comment_vec_opt {
+    if comment_vec_opt.is_none() {
         return "".to_string();
     }
     let mut comment_vec = comment_vec_opt.unwrap();
     let comment = comment_vec.next();
-    match comment {
-        Some(c) => c,
-        None => "",
-    }
-    .to_string()
+    comment.unwrap_or("").to_string()
 }
 
 fn parse_vorbis_comment_integer(tag: &metaflac::Tag, tag_name: &str) -> i32 {
-    let track_str = parse_vorbis_comment(&tag, tag_name);
+    let track_str = parse_vorbis_comment(tag, tag_name);
     match track_str.as_str() {
         "" => 0,
         s => s.parse().unwrap_or(0),
@@ -163,27 +156,27 @@ fn parse_vorbis_comment_integer(tag: &metaflac::Tag, tag_name: &str) -> i32 {
 }
 fn tag_flac(path: &str) -> Option<SongTags> {
     let tag_result = metaflac::Tag::read_from_path(path);
-    let this_tag: Option<metaflac::Tag>;
-    match tag_result {
+
+    let this_tag: Option<metaflac::Tag> = match tag_result {
         Err(_) => return None,
-        Ok(tag) => this_tag = Some(tag),
-    }
+        Ok(tag) => Some(tag),
+    };
 
     if let Some(tag) = this_tag {
-        let path_split = path.split('.').into_iter();
+        let path_split = path.split('.');
         let suffix = path_split.clone().last().unwrap_or("");
         let metadata_option = get_metadata(path.to_string(), suffix.to_string());
         let (duration, suffix): (i32, String) = match metadata_option {
             Some(metadata) => (metadata.0.seconds as i32, metadata.1.to_string()),
             None => (0, suffix.to_string()),
         };
-        let artist = parse_vorbis_comment(&tag, &"ALBUMARTIST");
-        let album = parse_vorbis_comment(&tag, &"ALBUM");
-        let title = parse_vorbis_comment(&tag, &"TITLE");
-        let genre = parse_vorbis_comment(&tag, &"GENRE");
-        let track = parse_vorbis_comment_integer(&tag, &"TRACK");
-        let year = parse_vorbis_comment_integer(&tag, &"YEAR");
-        let disc_number = parse_vorbis_comment_integer(&tag, &"DISCNUMBER");
+        let artist = parse_vorbis_comment(&tag, "ALBUMARTIST");
+        let album = parse_vorbis_comment(&tag, "ALBUM");
+        let title = parse_vorbis_comment(&tag, "TITLE");
+        let genre = parse_vorbis_comment(&tag, "GENRE");
+        let track = parse_vorbis_comment_integer(&tag, "TRACK");
+        let year = parse_vorbis_comment_integer(&tag, "YEAR");
+        let disc_number = parse_vorbis_comment_integer(&tag, "DISCNUMBER");
         let song = SongTags {
             artist: str::replace(&artist, char::from(0), "?"),
             album: str::replace(&album, char::from(0), "?"),
@@ -217,7 +210,7 @@ fn get_metadata(path: String, suffix: String) -> Option<(Time, String)> {
 
     // Create a probe hint using the file's extension. [Optional]
     let mut hint = Hint::new();
-    hint.with_extension(&suffix.as_str());
+    hint.with_extension(suffix.as_str());
     // Use the default options for metadata and format readers.
     let metadata_opts: MetadataOptions = Default::default();
     let format_opts: FormatOptions = Default::default();
@@ -233,25 +226,13 @@ fn get_metadata(path: String, suffix: String) -> Option<(Time, String)> {
         error!("Error parsing with Symphonia: {}", err);
         return None;
     }
-    let probed;
-    match probed_result {
-        Ok(p) => {
-            probed = p;
-        }
+    let probed = match probed_result {
+        Ok(p) => p,
         Err(_) => return None,
-    }
+    };
     let track_option = first_supported_track(probed.format.tracks());
-    if let None = track_option {
-        return None;
-    }
     let track = track_option?;
     let params = &track.codec_params;
-    if let None = params.n_frames {
-        return None;
-    }
-    if let None = params.time_base {
-        return None;
-    }
     let n_frames = params.n_frames?;
     let tb = params.time_base?;
     let time = tb.calc_time(n_frames);

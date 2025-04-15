@@ -6,8 +6,6 @@ use log::{error, warn};
 use md5::{Digest, Md5};
 use serde::Deserialize;
 
-use entities::user;
-
 use crate::DatabaseState;
 
 #[derive(Deserialize, Clone)]
@@ -47,7 +45,7 @@ pub async fn auth_middleware(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let user_option = user_result.unwrap();
-    if let None = user_option {
+    if user_option.is_none() {
         warn!("User doesn't exist: {}", &owned_auth.u);
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -68,7 +66,6 @@ pub async fn auth_middleware(
     }
 
     // Carry on my wayward son
-    let response = next.run(request).await;
 
-    response
+    next.run(request).await
 }

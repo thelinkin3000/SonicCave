@@ -10,11 +10,8 @@ pub async fn get_song_paths(pool: &Pool<Postgres>) -> Result<Vec<String>, sqlx::
         sqlx::query_as!(SongPath, "select path from song;")
             .fetch_all(pool)
             .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
-    let res: Vec<String> = ret.unwrap().into_iter().map(|s| s.path).collect();
-    return Ok(res);
+    let res: Vec<String> = ret?.into_iter().map(|s| s.path).collect();
+    Ok(res)
 }
 
 pub async fn search_artists_paginated(
@@ -35,7 +32,7 @@ pub async fn search_artists_paginated(
         return None;
     }
     let vec = ret.unwrap();
-    if vec.len() > 0 { Some(vec) } else { None }
+    if !vec.is_empty() { Some(vec) } else { None }
 }
 
 pub async fn get_albums_by_artist_id(pool: &Pool<Postgres>, artist_id: Uuid) -> Option<Vec<Album>> {
@@ -48,7 +45,7 @@ pub async fn get_albums_by_artist_id(pool: &Pool<Postgres>, artist_id: Uuid) -> 
         return None;
     }
     let vec = ret.unwrap();
-    if vec.len() > 0 { Some(vec) } else { None }
+    if !vec.is_empty() { Some(vec) } else { None }
 }
 
 pub async fn get_songs_by_album_id(pool: &Pool<Postgres>, album_id: Uuid) -> Option<Vec<Song>> {
@@ -64,17 +61,15 @@ pub async fn get_songs_by_album_id(pool: &Pool<Postgres>, album_id: Uuid) -> Opt
         return None;
     }
     let vec = ret.unwrap();
-    if vec.len() > 0 { Some(vec) } else { None }
+    if !vec.is_empty() { Some(vec) } else { None }
 }
 
 pub async fn delete_song_by_id(pool: &Pool<Postgres>, song_id: Uuid) -> Result<(), sqlx::Error> {
     let ret = sqlx::query!("delete from song where id = $1", song_id)
         .execute(pool)
         .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
-    return Ok(());
+    ret?;
+    Ok(())
 }
 pub async fn get_all_artists(pool: &Pool<Postgres>) -> Result<Vec<Artist>, sqlx::Error> {
     sqlx::query_as!(Artist, "select * from artist")
@@ -98,17 +93,13 @@ pub async fn delete_album_by_id(pool: &Pool<Postgres>, album_id: Uuid) -> Result
     let ret = sqlx::query!("delete from song where album_id = $1", album_id)
         .execute(pool)
         .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
+    ret?;
 
     let ret = sqlx::query!("delete from album where id = $1", album_id)
         .execute(pool)
         .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
-    return Ok(());
+    ret?;
+    Ok(())
 }
 pub async fn get_song_by_id(
     pool: &Pool<Postgres>,
@@ -154,7 +145,7 @@ pub async fn delete_artist_by_id(
     for album in albums {
         delete_album_by_id(pool, album.id).await?;
     }
-    return Ok(());
+    Ok(())
 }
 pub struct ReturnId {
     pub id: Uuid,
@@ -166,28 +157,20 @@ pub async fn prune_songs(pool: &Pool<Postgres>, paths: &Vec<String>) -> Result<(
     )
     .execute(pool)
     .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
+    ret?;
     ret = sqlx::query!("delete from song where path =ANY($1)", paths)
         .execute(pool)
         .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
+    ret?;
     ret = sqlx::query!("delete from album where id not in (select distinct album_id from song)")
         .execute(pool)
         .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
+    ret?;
     ret = sqlx::query!("delete from artist where id not in (select distinct artist_id from album)")
         .execute(pool)
         .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
-    return Ok(());
+    ret?;
+    Ok(())
 }
 pub async fn add_artist(pool: &Pool<Postgres>, artist: &Artist) -> Result<Uuid, sqlx::Error> {
     let ret = sqlx::query_as! {
@@ -198,10 +181,7 @@ pub async fn add_artist(pool: &Pool<Postgres>, artist: &Artist) -> Result<Uuid, 
     }
     .fetch_one(pool)
     .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
-    Ok(ret.unwrap().id)
+    Ok(ret?.id)
 }
 pub async fn add_album(
     pool: &Pool<Postgres>,
@@ -226,18 +206,13 @@ pub async fn add_album(
     )
     .fetch_one(pool)
     .await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
-    let album_id = ret.unwrap().id;
+    let album_id = ret?.id;
     let mut mut_songs = songs.to_owned();
     for song in &mut mut_songs {
         song.album_id = album_id;
     }
     let songs_ret = add_songs(pool, &mut_songs).await;
-    if let Err(e) = songs_ret {
-        return Err(e);
-    }
+    songs_ret?;
     Ok(())
 }
 
@@ -277,8 +252,6 @@ select * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
         &album_id[..],
         &disc_number[..]
     ).execute(pool).await;
-    if let Err(e) = ret {
-        return Err(e);
-    }
+    ret?;
     Ok(())
 }

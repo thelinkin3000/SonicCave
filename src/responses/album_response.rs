@@ -22,7 +22,7 @@ impl AlbumResponse {
             .into_iter()
             .map(|i| {
                 duration += i.duration;
-                return SongResponseData {
+                SongResponseData {
                     id: i.id,
                     parent: i.album_id,
                     is_dir: false,
@@ -46,7 +46,7 @@ impl AlbumResponse {
                     artist_id: artist.id,
                     r#type: "audio".to_string(),
                     is_video: false,
-                };
+                }
             })
             .collect();
         let album_ret = AlbumResponseData {
