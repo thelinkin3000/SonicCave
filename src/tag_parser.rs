@@ -115,7 +115,7 @@ fn tag_id3(path: &str) -> Option<SongTags> {
             metadata_option = Some((Time::from(tag.duration().unwrap_or(0)), suffix.to_string()));
         }
         let metadata = metadata_option?;
-        let artist = tag.album_artist().unwrap_or("");
+        let artist = tag.album_artist().unwrap_or(tag.artist().unwrap_or(""));
         let album = tag.album().unwrap_or("");
         let title = tag.title().unwrap_or("");
         let genre = tag.genre().unwrap_or("");
@@ -137,18 +137,17 @@ fn tag_id3(path: &str) -> Option<SongTags> {
     None
 }
 
-fn parse_vorbis_comment(tag: &metaflac::Tag, tag_name: &str) -> String {
+fn parse_vorbis_comment(tag: &metaflac::Tag, tag_name: &str) -> Option<String> {
     let comment_vec_opt = tag.get_vorbis(tag_name);
-    if comment_vec_opt.is_none() {
-        return "".to_string();
-    }
+    comment_vec_opt.as_ref()?;
     let mut comment_vec = comment_vec_opt.unwrap();
     let comment = comment_vec.next();
-    comment.unwrap_or("").to_string()
+    comment?;
+    Some(comment.unwrap().to_string())
 }
 
 fn parse_vorbis_comment_integer(tag: &metaflac::Tag, tag_name: &str) -> i32 {
-    let track_str = parse_vorbis_comment(tag, tag_name);
+    let track_str = parse_vorbis_comment(tag, tag_name).unwrap_or("".into());
     match track_str.as_str() {
         "" => 0,
         s => s.parse().unwrap_or(0),
@@ -170,10 +169,14 @@ fn tag_flac(path: &str) -> Option<SongTags> {
             Some(metadata) => (metadata.0.seconds as i32, metadata.1.to_string()),
             None => (0, suffix.to_string()),
         };
-        let artist = parse_vorbis_comment(&tag, "ALBUMARTIST");
-        let album = parse_vorbis_comment(&tag, "ALBUM");
-        let title = parse_vorbis_comment(&tag, "TITLE");
-        let genre = parse_vorbis_comment(&tag, "GENRE");
+        let artist = parse_vorbis_comment(&tag, "ALBUMARTIST").unwrap_or(
+            parse_vorbis_comment(&tag, "ARTIST")
+                .unwrap_or("".to_string())
+                .to_string(),
+        );
+        let album = parse_vorbis_comment(&tag, "ALBUM").unwrap_or("".into());
+        let title = parse_vorbis_comment(&tag, "TITLE").unwrap_or("".into());
+        let genre = parse_vorbis_comment(&tag, "GENRE").unwrap_or("".into());
         let track = parse_vorbis_comment_integer(&tag, "TRACK");
         let year = parse_vorbis_comment_integer(&tag, "YEAR");
         let disc_number = parse_vorbis_comment_integer(&tag, "DISCNUMBER");

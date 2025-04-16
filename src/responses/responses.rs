@@ -150,7 +150,7 @@ pub struct AlbumList2Item {
 }
 
 impl SubsonicResponse<AlbumList2Response> {
-    pub fn album_list2_from_album_list(list: Vec<Album>, artists_list: Vec<Artist>) -> Self {
+    pub fn album_list2_from_album_list(list: &Vec<Album>, artists_list: &Vec<Artist>) -> Self {
         let mut ret = Vec::new();
         for item in list {
             // I'm sure I have the artist

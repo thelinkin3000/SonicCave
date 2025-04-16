@@ -5,6 +5,41 @@ pub struct SongPath {
     path: String,
 }
 
+pub async fn get_albums(
+    pool: &Pool<Postgres>,
+    limit: i32,
+    offset: i32,
+) -> Result<Vec<Album>, sqlx::Error> {
+    sqlx::query_as!(
+        Album,
+        "select * from album order by name limit $1 offset $2",
+        i64::try_from(limit).unwrap(),
+        i64::try_from(offset).unwrap()
+    )
+    .fetch_all(pool)
+    .await
+}
+pub async fn get_random_albums(
+    pool: &Pool<Postgres>,
+    limit: i32,
+) -> Result<Vec<Album>, sqlx::Error> {
+    sqlx::query_as!(
+        Album,
+        "select * from album order by RANDOM() limit $1",
+        i64::try_from(limit).unwrap()
+    )
+    .fetch_all(pool)
+    .await
+}
+pub async fn get_artists_by_id(
+    pool: &Pool<Postgres>,
+    ids: &Vec<Uuid>,
+) -> Result<Vec<Artist>, sqlx::Error> {
+    sqlx::query_as!(Artist, "select * from artist where id = any($1)", ids)
+        .fetch_all(pool)
+        .await
+}
+
 pub async fn get_song_paths(pool: &Pool<Postgres>) -> Result<Vec<String>, sqlx::Error> {
     let ret: Result<Vec<SongPath>, sqlx::Error> =
         sqlx::query_as!(SongPath, "select path from song;")
