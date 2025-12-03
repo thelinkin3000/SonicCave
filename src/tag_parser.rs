@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::fs::File;
 
+use chrono::{Datelike, NaiveDateTime};
 use entities::album::Album;
 use entities::artist::Artist;
 use entities::song::Song;
 use id3::{Tag, TagLike};
-use log::error;
+use log::{error, warn};
 use symphonia::core::codecs::CODEC_TYPE_NULL;
 
 use symphonia::core::formats::{FormatOptions, Track};
@@ -119,12 +120,19 @@ fn tag_id3(path: &str) -> Option<SongTags> {
         let album = tag.album().unwrap_or("");
         let title = tag.title().unwrap_or("");
         let genre = tag.genre().unwrap_or("");
+        let mut year_int = tag.year().unwrap_or(0);
+        if year_int == 0 {
+            let year_timestamp = tag
+                .date_released()
+                .unwrap_or(tag.date_recorded().unwrap_or_default());
+            year_int = year_timestamp.year;
+        }
         let song = SongTags {
             artist: str::replace(artist, char::from(0), "?"),
             album: str::replace(album, char::from(0), "?"),
             duration: metadata.0.seconds as i32,
             track: tag.track().unwrap_or(0) as i32,
-            year: tag.year().unwrap_or(0),
+            year: year_int,
             title: str::replace(title, char::from(0), "?"),
             path: path.to_string(),
             genre: str::replace(genre, char::from(0), "?"),
@@ -143,14 +151,31 @@ fn parse_vorbis_comment(tag: &metaflac::Tag, tag_name: &str) -> Option<String> {
     let mut comment_vec = comment_vec_opt.unwrap();
     let comment = comment_vec.next();
     comment?;
+    if comment.unwrap().trim() == "" {
+        return None;
+    }
     Some(comment.unwrap().to_string())
 }
 
-fn parse_vorbis_comment_integer(tag: &metaflac::Tag, tag_name: &str) -> i32 {
-    let track_str = parse_vorbis_comment(tag, tag_name).unwrap_or("".into());
-    match track_str.as_str() {
-        "" => 0,
-        s => s.parse().unwrap_or(0),
+fn parse_vorbis_comment_integer(tag: &metaflac::Tag, tag_name: &str) -> Option<i32> {
+    let tag_str = parse_vorbis_comment(tag, tag_name)?;
+    match tag_str.as_str().parse() {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    }
+}
+fn parse_vorbis_comment_timestamp(tag: &metaflac::Tag, tag_name: &str) -> Option<NaiveDateTime> {
+    let tag_str = parse_vorbis_comment(tag, tag_name)?;
+    let mut date_time = NaiveDateTime::parse_from_str(&tag_str, "%Y");
+    if date_time.is_err() {
+        date_time = NaiveDateTime::parse_from_str(&tag_str, "%Y-%m-%d");
+    }
+    if date_time.is_err() {
+        date_time = NaiveDateTime::parse_from_str(&tag_str, "%m/%d/%Y");
+    }
+    match date_time {
+        Ok(d) => Some(d),
+        Err(_) => None,
     }
 }
 fn tag_flac(path: &str) -> Option<SongTags> {
@@ -169,17 +194,19 @@ fn tag_flac(path: &str) -> Option<SongTags> {
             Some(metadata) => (metadata.0.seconds as i32, metadata.1.to_string()),
             None => (0, suffix.to_string()),
         };
-        let artist = parse_vorbis_comment(&tag, "ALBUMARTIST").unwrap_or(
-            parse_vorbis_comment(&tag, "ARTIST")
-                .unwrap_or("".to_string())
-                .to_string(),
-        );
+        let mut artist = parse_vorbis_comment(&tag, "ALBUMARTIST").unwrap_or("".into());
+        if artist.trim() == "".trim() {
+            artist = parse_vorbis_comment(&tag, "ARTIST").unwrap_or("".into());
+            warn!("Got an empty albumartist! using {artist} instead");
+        }
         let album = parse_vorbis_comment(&tag, "ALBUM").unwrap_or("".into());
         let title = parse_vorbis_comment(&tag, "TITLE").unwrap_or("".into());
         let genre = parse_vorbis_comment(&tag, "GENRE").unwrap_or("".into());
-        let track = parse_vorbis_comment_integer(&tag, "TRACK");
-        let year = parse_vorbis_comment_integer(&tag, "YEAR");
-        let disc_number = parse_vorbis_comment_integer(&tag, "DISCNUMBER");
+        let track = parse_vorbis_comment_integer(&tag, "TRACK").unwrap_or(0);
+        let year = parse_vorbis_comment_timestamp(&tag, "YEAR")
+            .unwrap_or(parse_vorbis_comment_timestamp(&tag, "DATE").unwrap_or_default())
+            .year();
+        let disc_number = parse_vorbis_comment_integer(&tag, "DISCNUMBER").unwrap_or(1);
         let song = SongTags {
             artist: str::replace(&artist, char::from(0), "?"),
             album: str::replace(&album, char::from(0), "?"),

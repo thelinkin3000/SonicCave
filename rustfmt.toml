@@ -1,0 +1,4 @@
+blank_lines_lower_bound = 0
+reorder_impl_items = true
+reorder_imports = true
+group_imports = "StdExternalCrate"
